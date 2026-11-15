@@ -17,7 +17,14 @@ services:
     env_file:
       - .env.docker
     volumes:
-      - ../laravel-test:/var/www/html:delegated
+      # Path kode Laravel. Default: repo `laravel-test` sebagai folder SIBLING
+      # dari `docker-ecosystem` (lihat README "Struktur Direktori").
+      #   ~/projects/docker-ecosystem/app-laravel-docker/  ->  ../../laravel-test
+      #   ~/projects/laravel-test/
+      # Bila struktur folder Anda berbeda (mis. laravel-test di dalam
+      # docker-ecosystem), timpa lewat file `app-laravel-docker/.env`:
+      #   LARAVEL_APP_PATH=../laravel-test
+      - ${LARAVEL_APP_PATH:-../../laravel-test}:/var/www/html:delegated
     depends_on:
       - redis
     networks:
@@ -32,7 +39,7 @@ services:
     container_name: laravel-nginx
     restart: unless-stopped
     volumes:
-      - ../laravel-test:/var/www/html:delegated
+      - ${LARAVEL_APP_PATH:-../../laravel-test}:/var/www/html:delegated
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app

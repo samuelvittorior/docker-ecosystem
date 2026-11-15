@@ -6,7 +6,7 @@ ke banyak aplikasi Laravel.
 
 > Kode aplikasi Laravel **tidak** disimpan di repo ini. Repo ini hanya berisi
 > konfigurasi infrastruktur. Kode aplikasi ada di repo terpisah (`laravel-test`),
-> dan di-mount ke container melalui volume `../laravel-test`.
+> dan di-mount ke container melalui volume `${LARAVEL_APP_PATH:-../../laravel-test}`.
 
 ---
 
@@ -30,7 +30,7 @@ ke banyak aplikasi Laravel.
                              ▼
               ┌─────────────────────────────┐
               │ laravel-app (php:8.2-fpm)   │
-              │  /var/www/html ← ../laravel-test
+              │  /var/www/html ← $LARAVEL_APP_PATH
               └───────┬──────────────┬──────┘
                       │              │
         shared-network│              │laravel-network
@@ -55,7 +55,8 @@ ke banyak aplikasi Laravel.
 ## 📁 Struktur Direktori yang Diharapkan di VPS
 
 Kedua repo harus berada pada **folder induk yang sama** karena volume memakai
-path relatif `../laravel-test`:
+path relatif `${LARAVEL_APP_PATH:-../../laravel-test}` (dihitung dari folder
+`app-laravel-docker/`):
 
 ```
 ~/projects/
@@ -68,7 +69,17 @@ path relatif `../laravel-test`:
     └── vendor/
 ```
 
-> ⚠️ Jika struktur ini tidak dipenuhi, container akan gagal menemukan kode Laravel.
+> ⚠️ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
+> container akan gagal dengan `Composer could not find a composer.json file`.
+>
+> Bila Anda memakai struktur lain (mis. `laravel-test/` di **dalam**
+> `docker-ecosystem/`), timpa path-nya lewat file `app-laravel-docker/.env`:
+>
+> ```bash
+> cd ~/projects/docker-ecosystem/app-laravel-docker
+> echo 'LARAVEL_APP_PATH=../laravel-test' > .env
+> docker compose up -d --force-recreate app laravel-nginx
+> ```
 
 ---
 
@@ -195,7 +206,14 @@ nano reverse-proxy-docker/.env.docker
 | `db-postgres-docker/.env.docker` | `POSTGRES_PASSWORD` | ganti dari `postgres` |
 | `app-laravel-docker/.env.docker` | `DB_PASSWORD` | **harus sama** dengan di atas |
 | `app-laravel-docker/.env.docker` | `APP_URL` | sesuaikan domain Anda |
+| `app-laravel-docker/.env.docker` | `APP_KEY` | **ganti & rahasiakan** (`php artisan key:generate --show`) |
 | `app-laravel-docker/.env.docker` | `FPM_USER` / `FPM_GROUP` | biarkan `www-data` (user worker PHP-FPM) |
+
+Verifikasi cepat bahwa repo aplikasi benar-benar ada di path yang dipakai volume:
+```bash
+ls -l ~/projects/docker-ecosystem/../../laravel-test/composer.json
+# harus ada file-nya. Jika "No such file", path volume Anda salah.
+```
 
 > 🔑 **Soal permission:** container `laravel-app` dijalankan sebagai **root**, lalu
 > entrypoint otomatis `chown` folder `storage` & `bootstrap/cache` ke `www-data`
@@ -373,6 +391,8 @@ docker system df
 | 502 Bad Gateway | `laravel-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
 | "Class not found" | `vendor/` belum ada | `docker compose exec app composer install --no-dev -o` |
 | **`mkdir ... Permission denied` + container restart terus** | UID container ≠ owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
+| **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah → Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../laravel-test` (sibling repo), bukan `../laravel-test` |
+| **`No application encryption key has been specified`** | `APP_KEY` belum di-set | isi `APP_KEY` di `app-laravel-docker/.env.docker`, lalu recreate container |
 | Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | `route:cache` gagal | route berbasis Closure | pakai `Route::view('/', 'welcome')` |
 | DB connection refused | app & db beda network, DB belum siap | pastikan keduanya di `shared-network`, cek log `postgres-db` |

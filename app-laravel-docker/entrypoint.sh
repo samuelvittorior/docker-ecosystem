@@ -49,6 +49,19 @@ else
         || echo "!! Tidak bisa memperbaiki permission (bukan root). Jalankan di HOST: sudo chown -R $FPM_USER:$FPM_GROUP storage bootstrap/cache"
 fi
 
+# -----------------------------------------------------------------------------
+# Pastikan APP_KEY tersedia. Laravel memakainya untuk mengenkripsi cookie &
+# session, jadi tanpa ini setiap request gagal dengan
+# "No application encryption key has been specified".
+# Sebaiknya set permanen di app-laravel-docker/.env.docker.
+# -----------------------------------------------------------------------------
+if [ -z "${APP_KEY:-}" ]; then
+    APP_KEY="base64:$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+    export APP_KEY
+    echo "!! APP_KEY kosong -> dibuat SEMENTARA (session/cookie hangus tiap restart)."
+    echo "!! Set APP_KEY permanen di app-laravel-docker/.env.docker"
+fi
+
 # Install dependency Composer bila vendor belum ada (mis. first deploy)
 if [ ! -f "$APP_DIR/vendor/autoload.php" ]; then
     echo "==> vendor/ belum ada, menjalankan composer install..."
