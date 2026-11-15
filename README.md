@@ -301,12 +301,74 @@ sudo chmod -R 775 storage bootstrap/cache
 - **Produksi:** buat A record domain (`app.laravel-test.com`) → `IP_VPS`.
 - **Uji cepat tanpa DNS:** sunting file `hosts` di komputer lokal, tambahkan
   `IP_VPS  app.laravel-test.com`.
+- **Belum punya domain sama sekali?** lanjut ke bagian **11** (akses lewat IP publik / `nip.io`).
 
 Uji dari VPS:
 ```bash
 curl -I http://localhost                                        # 200/302
 curl -H "Host: app.laravel-test.com" http://localhost/photos
 ```
+
+### 11) Akses sementara TANPA domain (lewat IP publik)
+
+Belum punya domain? Tidak masalah. Karena blok Laravel di `reverse-proxy-docker/nginx/default.conf`
+diberi `default_server`, request yang datang lewat **IP publik** langsung diteruskan ke aplikasi.
+
+**Cara 1 — langsung lewat IP publik**
+
+```bash
+curl -4 ifconfig.me        # catat IP publik VPS
+```
+
+Buka di browser:
+```
+http://IP_VPS/
+http://IP_VPS/photos
+```
+
+**Cara 2 (direkomendasikan) — pakai DNS wildcard gratis `nip.io`**
+
+`nip.io` memetakan `<apa-saja>.<IP>.nip.io` ke `<IP>` **tanpa perlu daftar domain**,
+sehingga routing berbasis `Host` (seperti nanti saat sudah punya domain) bisa diuji
+persis. Contoh bila IP VPS `203.0.113.10`:
+```
+http://app.203.0.113.10.nip.io/
+http://app.203.0.113.10.nip.io/photos
+```
+`sslip.io` bisa dipakai sebagai alternatif dengan pola yang sama.
+
+Bentuk lain yang sering dipakai adalah IP dengan tanda hubung:
+`http://app.203-0-113-10.nip.io/photos`.
+
+**Cara 3 — lewatkan reverse proxy (khusus debugging)**
+
+Untuk memastikan apakah masalahnya di aplikasi atau di reverse proxy, buka langsung
+port Nginx internal aplikasi. Tambahkan sementara di `app-laravel-docker/docker-compose.yml`:
+
+```yaml
+  laravel-nginx:
+    ports:
+      - "8080:80"
+```
+
+```bash
+cd ~/projects/docker-ecosystem/app-laravel-docker
+docker compose up -d laravel-nginx
+# akses: http://IP_VPS:8080
+```
+
+> Hapus kembali mapping `8080:80` setelah selesai (jangan dibiarkan di produksi).
+
+**Prasyarat yang sering terlupa:**
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw status
+```
+
+> Opsional: `APP_URL` di `app-laravel-docker/.env.docker` boleh dibiarkan.
+> Asset & link Laravel mengikuti `Host` dari request, jadi tetap benar baik diakses
+> lewat IP maupun `nip.io`. Set `APP_URL` permanen hanya saat domain final sudah siap.
 
 ---
 
@@ -393,6 +455,9 @@ docker system df
 | **`mkdir ... Permission denied` + container restart terus** | UID container ≠ owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah → Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../laravel-test` (sibling repo), bukan `../laravel-test` |
 | **`No application encryption key has been specified`** | `APP_KEY` belum di-set | isi `APP_KEY` di `app-laravel-docker/.env.docker`, lalu recreate container |
+| **`http://IP_VPS/` menampilkan "Reverse Proxy is running..."** | blok catch-all masih `default_server` | beri `default_server` ke blok Laravel di `reverse-proxy-docker/nginx/default.conf`, lalu `docker compose up -d --force-recreate reverse-proxy` |
+| Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
+| `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
 | Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | `route:cache` gagal | route berbasis Closure | pakai `Route::view('/', 'welcome')` |
 | DB connection refused | app & db beda network, DB belum siap | pastikan keduanya di `shared-network`, cek log `postgres-db` |
