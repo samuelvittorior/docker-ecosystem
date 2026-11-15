@@ -1,0 +1,46 @@
+name: CI/CD - Deploy Laravel to VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy App Laravel ke VPS via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            # Pastikan shared-network sudah ada (dibuat oleh compose PostgreSQL)
+            docker network inspect shared-network >/dev/null 2>&1 || docker network create shared-network
+
+            # Masuk ke folder app-laravel-docker
+            cd ${{ secrets.VPS_PROJECT_PATH }}/app-laravel-docker
+            git pull origin main
+
+            # Build dan jalankan app + redis + nginx (laravel-nginx)
+            docker-compose up -d --build app redis laravel-nginx
+
+            # Tunggu aplikasi siap
+            sleep 10
+
+            # Jalankan migrasi database (PostgreSQL harus sudah nyala di compose terpisah)
+            docker-compose exec -T app php artisan migrate --force
+
+            # Cache konfigurasi untuk produksi
+            docker-compose exec -T app php artisan config:cache
+            docker-compose exec -T app php artisan route:cache
+            docker-compose exec -T app php artisan view:cache
+
+            # Restart app agar konfigurasi baru diterapkan
+            docker-compose restart app
+
+            echo "✅ Deployment Laravel selesai!"

@@ -1,0 +1,34 @@
+# =============================================================================
+# .gitignore untuk docker-ecosystem
+# Tujuan: HANYA menyimpan file konfigurasi Docker/Infra.
+# Kode aplikasi Laravel (folder laravel-test/) dikelola di repo terpisah,
+# jadi di-exclude dari repo ini.
+# =============================================================================
+
+# Kode aplikasi Laravel -> dikelola di repo sendiri (laravel-test)
+laravel-test/
+
+# Environment & secret (jangan pernah di-commit)
+**/.env
+**/.env.docker.swp
+*.env
+!**/.env.docker
+
+# Kunci/cert SSL
+reverse-proxy-docker/nginx/certs/*
+!reverse-proxy-docker/nginx/certs/.gitkeep
+
+# Log & data runtime
+app-laravel-docker/storage/logs/*
+!app-laravel-docker/storage/logs/.gitkeep
+
+# Override compose (berisi setting lokal)
+docker-compose.override.yml
+**/docker-compose.override.yml
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store

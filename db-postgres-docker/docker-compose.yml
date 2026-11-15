@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  # =========================================================================
+  # PostgreSQL - Database bersama untuk banyak aplikasi
+  # =========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/conf.d:/docker-entrypoint-initdb.d/:ro
+    # Port 5432 sengaja TIDAK diexpose ke host untuk keamanan.
+    # Database hanya dapat diakses oleh container lain via shared-network.
+    networks:
+      - postgres-network
+      - shared-network
+
+networks:
+  postgres-network:
+    driver: bridge
+  shared-network:
+    driver: bridge
+    name: shared-network
+
+volumes:
+  postgres-data:
+    driver: local
