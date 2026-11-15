@@ -195,12 +195,12 @@ nano reverse-proxy-docker/.env.docker
 | `db-postgres-docker/.env.docker` | `POSTGRES_PASSWORD` | ganti dari `postgres` |
 | `app-laravel-docker/.env.docker` | `DB_PASSWORD` | **harus sama** dengan di atas |
 | `app-laravel-docker/.env.docker` | `APP_URL` | sesuaikan domain Anda |
-| `app-laravel-docker/.env.docker` | `APP_UID` / `APP_GID` | samakan dengan `id -u` / `id -g` |
+| `app-laravel-docker/.env.docker` | `FPM_USER` / `FPM_GROUP` | biarkan `www-data` (user worker PHP-FPM) |
 
-Cek UID/GID user Anda lalu sesuaikan:
-```bash
-id -u && id -g     # umumnya 1000 1000
-```
+> 🔑 **Soal permission:** container `laravel-app` dijalankan sebagai **root**, lalu
+> entrypoint otomatis `chown` folder `storage` & `bootstrap/cache` ke `www-data`
+> dan menurunkan privilege worker PHP-FPM ke `www-data`. Karena itu Anda **tidak
+> perlu** mencocokkan UID host dengan UID container.
 
 Tambahkan juga file `.env` untuk Laravel (tidak ikut repo):
 ```bash
@@ -251,7 +251,8 @@ cd app-laravel-docker && docker compose logs -f app
 
 Entrypoint container `laravel-app` otomatis menjalankan:
 1. Membuat folder `storage/` & `bootstrap/cache/`
-2. Memperbaiki permission kedua folder itu (**pengganti `chmod` manual**)
+2. Memperbaiki permission kedua folder itu dengan `chown` ke `www-data`
+   (**pengganti `chmod` manual**; container dijalankan sebagai root agar ini selalu bisa)
 3. `composer install` (jika `vendor/` belum ada)
 4. `php artisan storage:link`
 5. `php artisan migrate --force` (jika `RUN_MIGRATIONS=true`)
@@ -265,13 +266,17 @@ Entrypoint container `laravel-app` otomatis menjalankan:
 ### 9) Perbaikan permission (cadangan)
 
 Entrypoint sudah menangani permission otomatis. Jika muncul error tulis
-(mis. unggah foto gagal), perbaiki sekali di host:
+(mis. unggah foto gagal atau `mkdir ... Permission denied`), perbaiki sekali di host:
 
 ```bash
 cd ~/projects/laravel-test
-sudo chown -R $(id -u):$(id -g) storage bootstrap/cache
-chmod -R 775 storage bootstrap/cache
+sudo mkdir -p storage/framework/{cache/data,sessions,views} storage/logs bootstrap/cache
+sudo chown -R www-data:www-data storage bootstrap/cache
+sudo chmod -R 775 storage bootstrap/cache
 ```
+
+> Jika container dijalankan dengan `user:` khusus (bukan root), ganti `www-data`
+> sesuai user pada `FPM_USER`/`FPM_GROUP`.
 
 ### 10) DNS / pengujian domain
 
@@ -367,7 +372,8 @@ docker system df
 | `network shared-network not found` | network belum dibuat | `docker network create shared-network` lalu `docker compose up -d` ulang |
 | 502 Bad Gateway | `laravel-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
 | "Class not found" | `vendor/` belum ada | `docker compose exec app composer install --no-dev -o` |
-| Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R $(id -u):$(id -g) storage bootstrap/cache` |
+| **`mkdir ... Permission denied` + container restart terus** | UID container ≠ owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
+| Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | `route:cache` gagal | route berbasis Closure | pakai `Route::view('/', 'welcome')` |
 | DB connection refused | app & db beda network, DB belum siap | pastikan keduanya di `shared-network`, cek log `postgres-db` |
 | Port 80 sudah dipakai | Apache/Nginx di host aktif | `sudo systemctl stop apache2 nginx` |

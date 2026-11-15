@@ -11,16 +11,15 @@ services:
     container_name: laravel-app
     restart: unless-stopped
     working_dir: /var/www/html
-    # Jalankan sebagai UID:GID yang sama dengan user di HOST/VPS (di Debian 12,
-    # user pertama biasanya UID 1000). Tujuannya agar file yang DIBUAT Laravel
-    # (log/upload/cache) tetap bisa dibaca & diedit dari sisi host.
-    # Cek UID/GID Anda di VPS dengan: id -u && id -g
-    user: "1000:1000"
+    # CATATAN: container sengaja dijalankan sebagai ROOT (default).
+    # Entrypoint akan memperbaiki permission storage & bootstrap/cache
+    # (chown ke www-data) lalu PHP-FPM menurunkan privilege worker ke
+    # www-data sesuai php/www.conf. Cara ini tahan terhadap perbedaan UID
+    # di host dan mencegah error "Permission denied" saat mkdir.
     env_file:
       - .env.docker
     volumes:
       - ../laravel-test:/var/www/html:delegated
-      - ./storage/logs:/var/www/html/storage/logs:delegated
     depends_on:
       - redis
     networks:
