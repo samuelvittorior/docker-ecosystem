@@ -1,0 +1,108 @@
+name: Deploy Infra - docker-ecosystem
+
+# Workflow ini mengelola INFRASTRUKTUR (Docker Compose).
+# Dijalankan otomatis setiap ada push ke branch main, atau manual dari tab Actions.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Cegah 2 deployment berjalan bersamaan
+concurrency:
+  group: deploy-infra
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validasi konfigurasi Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validasi YAML & Compose config
+        run: |
+          set -e
+          for f in db-postgres-docker/docker-compose.yml \
+                   reverse-proxy-docker/docker-compose.yml \
+                   app-laravel-docker/docker-compose.yml; do
+            echo "==> Memeriksa $f"
+            # docker compose config -q memvalidasi sintaks + resolusi env/network
+            docker compose -f "$f" config -q || {
+              echo "::error::Konfigurasi compose tidak valid: $f"; exit 1; }
+          done
+          echo "Semua konfigurasi compose valid."
+
+      - name: Cek file wajib
+        run: |
+          set -e
+          required="app-laravel-docker/Dockerfile
+          app-laravel-docker/entrypoint.sh
+          app-laravel-docker/nginx/default.conf
+          app-laravel-docker/php/www.conf
+          app-laravel-docker/php/opcache.ini
+          db-postgres-docker/postgres/conf.d/shared-buffer.sql
+          reverse-proxy-docker/nginx/default.conf"
+          for f in $required; do
+            [ -f "$f" ] || { echo "::error::File wajib tidak ditemukan: $f"; exit 1; }
+          done
+          echo "Semua file wajib tersedia."
+
+  deploy:
+    name: Deploy infra ke VPS
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          INFRA_PATH: ${{ secrets.VPS_INFRA_PATH }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script_stop: true
+          envs: INFRA_PATH
+          script: |
+            set -e
+            echo "==> Memastikan shared-network tersedia"
+            docker network inspect shared-network >/dev/null 2>&1 || docker network create shared-network
+
+            echo "==> Masuk ke folder infra: $INFRA_PATH"
+            cd "$INFRA_PATH"
+
+            echo "==> Menarik perubahan terbaru"
+            git fetch --all --prune
+            git pull --ff-only origin main
+
+            echo "==> Memeriksa .env.docker di setiap service"
+            for svc in app-laravel-docker db-postgres-docker reverse-proxy-docker; do
+              if [ ! -f "$svc/.env.docker" ]; then
+                echo "::error::$svc/.env.docker belum ada di VPS. File ini ikut ter-commit; jalankan 'git pull' lalu cek kembali."
+                exit 1
+              fi
+            done
+
+            echo "==> Validasi compose"
+            docker compose -f db-postgres-docker/docker-compose.yml config -q
+            docker compose -f reverse-proxy-docker/docker-compose.yml config -q
+            docker compose -f app-laravel-docker/docker-compose.yml config -q
+
+            echo "==> 1/3 Menjalankan PostgreSQL"
+            (cd db-postgres-docker && docker compose up -d)
+
+            echo "==> 2/3 Menjalankan Reverse Proxy"
+            (cd reverse-proxy-docker && docker compose up -d)
+
+            echo "==> 3/3 Build & jalankan Laravel (app + nginx + redis)"
+            cd app-laravel-docker
+            docker compose up -d --build --remove-orphans app redis laravel-nginx
+
+            echo "==> Membersihkan image lama yang tidak terpakai"
+            docker image prune -f
+
+            echo "==> Status kontainer"
+            docker compose ps
+            echo "Deploy infra selesai."
