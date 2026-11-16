@@ -1,45 +1,45 @@
-# 🐳 Docker Ecosystem — Laravel + PostgreSQL + Redis + Nginx Reverse Proxy
+# ðŸ³ Docker Ecosystem â€” Laravel + PostgreSQL + Redis + Nginx Reverse Proxy
 
 Kumpulan **Docker Compose** yang terpisah namun saling terhubung lewat satu network
-bersama (`shared-network`), dirancang untuk VPS kecil (RAM ±6 GB) dan mudah di-scale
+bersama (`shared-network`), dirancang untuk VPS kecil (RAM Â±6 GB) dan mudah di-scale
 ke banyak aplikasi Laravel.
 
 > Kode aplikasi Laravel **tidak** disimpan di repo ini. Repo ini hanya berisi
-> konfigurasi infrastruktur. Kode aplikasi ada di repo terpisah (`laravel-test`),
-> dan di-mount ke container melalui volume `${LARAVEL_APP_PATH:-../../laravel-test}`.
+> konfigurasi infrastruktur. Kode aplikasi ada di repo terpisah (`attendapp`),
+> dan di-mount ke container melalui volume `${LARAVEL_APP_PATH:-../../attendapp}`.
 
 ---
 
-## 🏗️ Arsitektur
+## ðŸ—ï¸ Arsitektur
 
 ```
                         Internet
-                            │
-                            ▼
-              ┌─────────────────────────────┐
-              │  reverse-proxy (nginx:alpine)│  port 80 / 443
-              │  app.laravel-test.com        │
-              └───────────────┬─────────────┘
-                             │ proxy_pass (HTTP) via shared-network
-                             ▼
-              ┌─────────────────────────────┐
-              │ laravel-nginx (nginx:alpine)│  listen 80
-              │ root: /var/www/html/public  │
-              └──────────────┬──────────────┘
-                             │ fastcgi_pass laravel-app:9000
-                             ▼
-              ┌─────────────────────────────┐
-              │ laravel-app (php:8.2-fpm)   │
-              │  /var/www/html ← $LARAVEL_APP_PATH
-              └───────┬──────────────┬──────┘
-                      │              │
-        shared-network│              │laravel-network
-                      ▼              ▼
-        ┌───────────────────┐  ┌──────────────┐
-        │ postgres-db       │  │ redis        │
-        │ postgres:15-alpine│  │ redis:alpine │
-        │ (port TIDAK dibuka)│ └──────────────┘
-        └───────────────────┘
+                            â”‚
+                            â–¼
+              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+              â”‚  reverse-proxy (nginx:alpine)â”‚  port 80 / 443
+              â”‚  app.attendapp.com        â”‚
+              â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚ proxy_pass (HTTP) via shared-network
+                             â–¼
+              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+              â”‚ laravel-nginx (nginx:alpine)â”‚  listen 80
+              â”‚ root: /var/www/html/public  â”‚
+              â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚ fastcgi_pass app:9000
+                             â–¼
+              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+              â”‚ app (php:8.2-fpm)          â”‚
+              â”‚  /var/www/html â† $LARAVEL_APP_PATH
+              â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+                      â”‚              â”‚
+        shared-networkâ”‚              â”‚laravel-network
+                      â–¼              â–¼
+        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        â”‚ postgres-db       â”‚  â”‚ redis        â”‚
+        â”‚ postgres:15-alpineâ”‚  â”‚ redis:alpine â”‚
+        â”‚ (port TIDAK dibuka)â”‚ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 **Peran tiap folder:**
@@ -52,38 +52,38 @@ ke banyak aplikasi Laravel.
 
 ---
 
-## 📁 Struktur Direktori yang Diharapkan di VPS
+## ðŸ“ Struktur Direktori yang Diharapkan di VPS
 
 Kedua repo harus berada pada **folder induk yang sama** karena volume memakai
-path relatif `${LARAVEL_APP_PATH:-../../laravel-test}` (dihitung dari folder
+path relatif `${LARAVEL_APP_PATH:-../../attendapp}` (dihitung dari folder
 `app-laravel-docker/`):
 
 ```
 ~/projects/
-├── docker-ecosystem/          ← repo ini
-│   ├── app-laravel-docker/
-│   ├── db-postgres-docker/
-│   └── reverse-proxy-docker/
-└── laravel-test/              ← repo aplikasi Laravel
-    ├── app/  routes/  public/ ...
-    └── vendor/
+â”œâ”€â”€ docker-ecosystem/          â† repo ini
+â”‚   â”œâ”€â”€ app-laravel-docker/
+â”‚   â”œâ”€â”€ db-postgres-docker/
+â”‚   â””â”€â”€ reverse-proxy-docker/
+â””â”€â”€ attendapp/              â† repo aplikasi Laravel
+    â”œâ”€â”€ app/  routes/  public/ ...
+    â””â”€â”€ vendor/
 ```
 
-> ⚠️ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
+> âš ï¸ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
 > container akan gagal dengan `Composer could not find a composer.json file`.
 >
-> Bila Anda memakai struktur lain (mis. `laravel-test/` di **dalam**
+> Bila Anda memakai struktur lain (mis. `attendapp/` di **dalam**
 > `docker-ecosystem/`), timpa path-nya lewat file `app-laravel-docker/.env`:
 >
 > ```bash
 > cd ~/projects/docker-ecosystem/app-laravel-docker
-> echo 'LARAVEL_APP_PATH=../laravel-test' > .env
+> echo 'LARAVEL_APP_PATH=../attendapp' > .env
 > docker compose up -d --force-recreate app laravel-nginx
 > ```
 
 ---
 
-## 🖥️ Panduan Lengkap Setup VPS Debian 12
+## ðŸ–¥ï¸ Panduan Lengkap Setup VPS Debian 12
 
 > Semua perintah dijalankan via SSH sebagai user dengan hak `sudo`.
 > Ganti `IP_VPS` dengan IP server Anda.
@@ -169,7 +169,7 @@ docker run -d \
 docker ps   # pastikan container "portainer" berstatus Up
 ```
 
-Buka di browser: `https://IP_VPS:9443` → buat akun admin → pilih **Get Started (Local)**.
+Buka di browser: `https://IP_VPS:9443` â†’ buat akun admin â†’ pilih **Get Started (Local)**.
 
 ### 5) Clone repo dari GitHub
 
@@ -181,12 +181,12 @@ mkdir -p ~/projects && cd ~/projects
 git clone https://github.com/samuelvittorior/docker-ecosystem.git
 
 # 5.2 Repo aplikasi Laravel (harus bersebelahan!)
-git clone https://github.com/samuelvittorior/laravel-test.git
+git clone https://github.com/samuelvittorior/attendapp.git
 
 # Pastikan hasilnya:
 ls -1
 # docker-ecosystem
-# laravel-test
+# attendapp
 ```
 
 ### 6) Siapkan file environment
@@ -211,27 +211,27 @@ nano reverse-proxy-docker/.env.docker
 
 Verifikasi cepat bahwa repo aplikasi benar-benar ada di path yang dipakai volume:
 ```bash
-ls -l ~/projects/docker-ecosystem/../../laravel-test/composer.json
+ls -l ~/projects/docker-ecosystem/../../attendapp/composer.json
 # harus ada file-nya. Jika "No such file", path volume Anda salah.
 ```
 
-> 🔑 **Soal permission:** container `laravel-app` dijalankan sebagai **root**, lalu
+> ðŸ”‘ **Soal permission:** container `app` dijalankan sebagai **root**, lalu
 > entrypoint otomatis `chown` folder `storage` & `bootstrap/cache` ke `www-data`
 > dan menurunkan privilege worker PHP-FPM ke `www-data`. Karena itu Anda **tidak
 > perlu** mencocokkan UID host dengan UID container.
 
 Tambahkan juga file `.env` untuk Laravel (tidak ikut repo):
 ```bash
-cd ~/projects/laravel-test
+cd ~/projects/attendapp
 cp .env.example .env
 nano .env
 #   APP_ENV=production
 #   APP_DEBUG=false
-#   APP_URL=http://app.laravel-test.com
+#   APP_URL=http://app.attendapp.com
 #   DB_CONNECTION=pgsql
 #   DB_HOST=postgres-db
 #   DB_PORT=5432
-#   DB_DATABASE=laravel-test
+#   DB_DATABASE=attendapp
 #   DB_USERNAME=postgres
 #   DB_PASSWORD=<sama seperti .env.docker>
 #   CACHE_DRIVER=redis
@@ -267,7 +267,7 @@ docker ps
 cd app-laravel-docker && docker compose logs -f app
 ```
 
-Entrypoint container `laravel-app` otomatis menjalankan:
+Entrypoint container `app` otomatis menjalankan:
 1. Membuat folder `storage/` & `bootstrap/cache/`
 2. Memperbaiki permission kedua folder itu dengan `chown` ke `www-data`
    (**pengganti `chmod` manual**; container dijalankan sebagai root agar ini selalu bisa)
@@ -287,7 +287,7 @@ Entrypoint sudah menangani permission otomatis. Jika muncul error tulis
 (mis. unggah foto gagal atau `mkdir ... Permission denied`), perbaiki sekali di host:
 
 ```bash
-cd ~/projects/laravel-test
+cd ~/projects/attendapp
 sudo mkdir -p storage/framework/{cache/data,sessions,views} storage/logs bootstrap/cache
 sudo chown -R www-data:www-data storage bootstrap/cache
 sudo chmod -R 775 storage bootstrap/cache
@@ -298,15 +298,15 @@ sudo chmod -R 775 storage bootstrap/cache
 
 ### 10) DNS / pengujian domain
 
-- **Produksi:** buat A record domain (`app.laravel-test.com`) → `IP_VPS`.
+- **Produksi:** buat A record domain (`app.attendapp.com`) â†’ `IP_VPS`.
 - **Uji cepat tanpa DNS:** sunting file `hosts` di komputer lokal, tambahkan
-  `IP_VPS  app.laravel-test.com`.
+  `IP_VPS  app.attendapp.com`.
 - **Belum punya domain sama sekali?** lanjut ke bagian **11** (akses lewat IP publik / `nip.io`).
 
 Uji dari VPS:
 ```bash
 curl -I http://localhost                                        # 200/302
-curl -H "Host: app.laravel-test.com" http://localhost/photos
+curl -H "Host: app.attendapp.com" http://localhost/photos
 ```
 
 ### 11) Akses sementara TANPA domain (lewat IP publik)
@@ -314,7 +314,7 @@ curl -H "Host: app.laravel-test.com" http://localhost/photos
 Belum punya domain? Tidak masalah. Karena blok Laravel di `reverse-proxy-docker/nginx/default.conf`
 diberi `default_server`, request yang datang lewat **IP publik** langsung diteruskan ke aplikasi.
 
-**Cara 1 — langsung lewat IP publik**
+**Cara 1 â€” langsung lewat IP publik**
 
 ```bash
 curl -4 ifconfig.me        # catat IP publik VPS
@@ -326,7 +326,7 @@ http://IP_VPS/
 http://IP_VPS/photos
 ```
 
-**Cara 2 (direkomendasikan) — pakai DNS wildcard gratis `nip.io`**
+**Cara 2 (direkomendasikan) â€” pakai DNS wildcard gratis `nip.io`**
 
 `nip.io` memetakan `<apa-saja>.<IP>.nip.io` ke `<IP>` **tanpa perlu daftar domain**,
 sehingga routing berbasis `Host` (seperti nanti saat sudah punya domain) bisa diuji
@@ -340,7 +340,7 @@ http://app.203.0.113.10.nip.io/photos
 Bentuk lain yang sering dipakai adalah IP dengan tanda hubung:
 `http://app.203-0-113-10.nip.io/photos`.
 
-**Cara 3 — lewatkan reverse proxy (khusus debugging)**
+**Cara 3 â€” lewatkan reverse proxy (khusus debugging)**
 
 Untuk memastikan apakah masalahnya di aplikasi atau di reverse proxy, buka langsung
 port Nginx internal aplikasi. Tambahkan sementara di `app-laravel-docker/docker-compose.yml`:
@@ -372,37 +372,37 @@ sudo ufw status
 
 ---
 
-## 🔐 Akses Database lewat pgAdmin 4 (SSH Tunnel)
+## ðŸ” Akses Database lewat pgAdmin 4 (SSH Tunnel)
 
 Port 5432 **tidak terbuka ke internet**, tetapi di-bind ke `127.0.0.1` di VPS
 (lihat `db-postgres-docker/docker-compose.yml`) sehingga bisa dijangkau lewat SSH tunnel.
 
-### ⚠️ Sumber error "server closed the connection unexpectedly"
+### âš ï¸ Sumber error "server closed the connection unexpectedly"
 
 pgAdmin membuat tunnel seperti ini:
 
 ```
-pgAdmin  →  sshd (VPS)  →  <Host>:<Port> yang Anda isi di tab Connection
+pgAdmin  â†’  sshd (VPS)  â†’  <Host>:<Port> yang Anda isi di tab Connection
 ```
 
 Arti kolom di pgAdmin:
 
 | Kolom | Diisi apa | Catatan |
 |-------|-----------|---------|
-| **SSH Tunnel → Tunnel host** | `IP_VPS` | server SSH-nya |
-| **SSH Tunnel → Tunnel port** | `22` | port SSH |
-| **Connection → Host** | `127.0.0.1` | **alamat yang dilihat DARI DALAM VPS**, bukan dari laptop |
-| **Connection → Port** | `5432` | port PostgreSQL di dalam VPS |
+| **SSH Tunnel â†’ Tunnel host** | `IP_VPS` | server SSH-nya |
+| **SSH Tunnel â†’ Tunnel port** | `22` | port SSH |
+| **Connection â†’ Host** | `127.0.0.1` | **alamat yang dilihat DARI DALAM VPS**, bukan dari laptop |
+| **Connection â†’ Port** | `5432` | port PostgreSQL di dalam VPS |
 
-Kesalahan paling umum: mengisi **Connection → Host** dengan `127.0.0.1` **tanpa**
+Kesalahan paling umum: mengisi **Connection â†’ Host** dengan `127.0.0.1` **tanpa**
 mengaktifkan SSH tunnel. Akibatnya pgAdmin mencoba `127.0.0.1:5432` di **laptop Anda
-sendiri** (bukan VPS) → tidak ada PostgreSQL di sana → koneksi ditutup.
+sendiri** (bukan VPS) â†’ tidak ada PostgreSQL di sana â†’ koneksi ditutup.
 
-Kesalahan kedua: mengisi **Connection → Host** dengan `postgres-db` atau
+Kesalahan kedua: mengisi **Connection â†’ Host** dengan `postgres-db` atau
 `IP_VPS`. Nama container tidak bisa di-resolve oleh `sshd` di host, dan port
-5432 tidak terbuka ke publik — dua-duanya gagal.
+5432 tidak terbuka ke publik â€” dua-duanya gagal.
 
-### Cara A — SSH Tunnel dari dalam pgAdmin 4
+### Cara A â€” SSH Tunnel dari dalam pgAdmin 4
 
 1. Pastikan port sudah di-bind di VPS (sekali saja):
    ```bash
@@ -410,21 +410,21 @@ Kesalahan kedua: mengisi **Connection → Host** dengan `postgres-db` atau
    docker compose up -d --force-recreate postgres
    sudo ss -tlnp | grep 5432      # harus muncul 127.0.0.1:5432
    ```
-2. Di pgAdmin: klik kanan *Servers* → **Register** → **Server…**
+2. Di pgAdmin: klik kanan *Servers* â†’ **Register** â†’ **Serverâ€¦**
 3. Tab **General**: Name = `VPS Laravel`
 4. Tab **Connection**:
    - Host = `127.0.0.1`
    - Port = `5432`
-   - Maintenance database = `laravel-test`
+   - Maintenance database = `attendapp`
    - Username = `postgres`, Password = password DB Anda
 5. Tab **SSH Tunnel**: centang **Use SSH tunneling**
    - Tunnel host = `IP_VPS`
    - Tunnel port = `22`
    - Username = user SSH VPS Anda
    - Authentication = *Password* atau *Identity file* (private key)
-6. **Save** → pgAdmin membuat tunnel otomatis.
+6. **Save** â†’ pgAdmin membuat tunnel otomatis.
 
-### Cara B — tunnel manual via terminal (paling mudah didiagnosis)
+### Cara B â€” tunnel manual via terminal (paling mudah didiagnosis)
 
 ```bash
 ssh -N -L 5432:127.0.0.1:5432 user@IP_VPS
@@ -443,40 +443,40 @@ sudo ss -tlnp | grep 5432
 
 # 2) login langsung dari dalam VPS
 docker compose -f ~/projects/docker-ecosystem/db-postgres-docker/docker-compose.yml \
-  exec postgres psql -U postgres -d laravel-test -c '\dt'
+  exec postgres psql -U postgres -d attendapp -c '\dt'
 
 # 3) cek log container bila koneksi ditolak
 docker logs --tail=50 postgres-db
 ```
 
-> ❗ Jangan pernah memakai `ports: "5432:5432"` (tanpa `127.0.0.1:`). Itu membuka
+> â— Jangan pernah memakai `ports: "5432:5432"` (tanpa `127.0.0.1:`). Itu membuka
 > database ke seluruh internet. Binding loopback + SSH tunnel sudah cukup aman.
 
 
 ---
 
-## ⚙️ GitHub Actions (Auto Deploy)
+## âš™ï¸ GitHub Actions (Auto Deploy)
 
 | Repo | File workflow | Fungsi |
 |------|---------------|--------|
 | `docker-ecosystem` | `.github/workflows/deploy-infra.yml` | Validasi compose + deploy infra ke VPS |
-| `laravel-test` | `.github/workflows/deploy.yml` | Test (PHPUnit) + deploy aplikasi (rebuild, migrate, cache) |
+| `attendapp` | `.github/workflows/deploy.yml` | Test (PHPUnit) + deploy aplikasi (rebuild, migrate, cache) |
 
-> ⚠️ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
+> âš ï¸ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
 > Workflow di subfolder (mis. `app-laravel-docker/.github/...`) tidak akan dijalankan.
 
 ### Secrets di GitHub (isi di KEDUA repo)
 
-Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
+Repo â†’ **Settings** â†’ **Secrets and variables** â†’ **Actions** â†’ **New repository secret**:
 
 | Secret | Contoh | Keterangan |
 |--------|--------|------------|
 | `VPS_HOST` | `203.0.113.10` | IP/hostname VPS |
 | `VPS_USER` | `deployer` | user SSH untuk deploy |
-| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----…` | **private key** SSH |
+| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----â€¦` | **private key** SSH |
 | `VPS_PORT` | `22` | port SSH |
 | `VPS_INFRA_PATH` | `/home/deployer/projects/docker-ecosystem` | path repo infra di VPS |
-| `VPS_APP_PATH` | `/home/deployer/projects/laravel-test` | path repo app (khusus repo Laravel) |
+| `VPS_APP_PATH` | `/home/deployer/projects/attendapp` | path repo app (khusus repo Laravel) |
 
 ### Membuat SSH key khusus deploy
 
@@ -488,7 +488,7 @@ cat ~/.ssh/deploy_key      # salin seluruh isi ini ke secret VPS_SSH_KEY
 
 ---
 
-## 🧰 Cheatsheet Pemeliharaan
+## ðŸ§° Cheatsheet Pemeliharaan
 
 ```bash
 docker ps -a                                    # status semua container
@@ -509,21 +509,21 @@ docker system df
 
 ---
 
-## 🩺 Troubleshooting
+## ðŸ©º Troubleshooting
 
 | Gejala | Sebab | Solusi |
 |--------|-------|--------|
 | `network shared-network not found` | network belum dibuat | `docker network create shared-network` lalu `docker compose up -d` ulang |
 | 502 Bad Gateway | `laravel-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
 | "Class not found" | `vendor/` belum ada | `docker compose exec app composer install --no-dev -o` |
-| **`mkdir ... Permission denied` + container restart terus** | UID container ≠ owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
-| **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah → Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../laravel-test` (sibling repo), bukan `../laravel-test` |
+| **`mkdir ... Permission denied` + container restart terus** | UID container â‰  owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
+| **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah â†’ Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../attendapp` (sibling repo), bukan `../attendapp` |
 | **`No application encryption key has been specified`** | `APP_KEY` belum di-set | isi `APP_KEY` di `app-laravel-docker/.env.docker`, lalu recreate container |
 | **`http://IP_VPS/` menampilkan "Reverse Proxy is running..."** | blok catch-all masih `default_server` | beri `default_server` ke blok Laravel di `reverse-proxy-docker/nginx/default.conf`, lalu `docker compose up -d --force-recreate reverse-proxy` |
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
 | **pgAdmin: `connection to server at "127.0.0.1", port ... failed: server closed the connection unexpectedly`** | (a) SSH Tunnel tidak dicentang, atau (b) port 5432 belum di-bind ke `127.0.0.1` di VPS | centang *Use SSH tunneling* + isi Tunnel host = IP VPS; lalu di VPS `docker compose up -d --force-recreate postgres` dan cek `ss -tlnp \| grep 5432` |
-| **pgAdmin: `could not translate host name "postgres-db"`** | Connection → Host diisi nama container, padahal tunnel keluar di host VPS | ganti Connection → Host menjadi `127.0.0.1` |
+| **pgAdmin: `could not translate host name "postgres-db"`** | Connection â†’ Host diisi nama container, padahal tunnel keluar di host VPS | ganti Connection â†’ Host menjadi `127.0.0.1` |
 | Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | `route:cache` gagal | route berbasis Closure | pakai `Route::view('/', 'welcome')` |
 | DB connection refused | app & db beda network, DB belum siap | pastikan keduanya di `shared-network`, cek log `postgres-db` |
@@ -531,15 +531,16 @@ docker system df
 
 ---
 
-## 📌 Catatan
+## ðŸ“Œ Catatan
 
-- **Keamanan:** `.env.docker` ikut ter-commit dan berisi kredensial — **ganti password**
+- **Keamanan:** `.env.docker` ikut ter-commit dan berisi kredensial â€” **ganti password**
   sebelum online. Jika repo publik, pertimbangkan memakai `.env.docker.example`.
 - **PostgreSQL** di-bind ke `127.0.0.1:5432` (loopback saja). Jangan diganti menjadi
   `5432:5432` karena itu membuka database ke internet. Akses dari luar memakai SSH tunnel.
 - **Kustomisasi RAM:** nilai di `db-postgres-docker/postgres/conf.d/shared-buffer.sql`
-  dioptimalkan untuk VPS ±6 GB. Sesuaikan bila berbeda.
+  dioptimalkan untuk VPS Â±6 GB. Sesuaikan bila berbeda.
 - **HTTPS:** blok SSL di `reverse-proxy-docker/nginx/default.conf` masih dikomentari.
   Aktifkan setelah punya sertifikat (mis. Let's Encrypt/Certbot).
+
 
 

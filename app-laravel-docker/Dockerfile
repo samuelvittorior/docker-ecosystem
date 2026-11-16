@@ -9,6 +9,7 @@ RUN apk add --no-cache \
     libzip-dev \
     libxml2-dev \
     oniguruma-dev \
+    postgresql-client \
     postgresql-dev \
     zlib-dev \
     git \

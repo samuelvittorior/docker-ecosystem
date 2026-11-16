@@ -42,6 +42,7 @@ jobs:
           app-laravel-docker/php/www.conf
           app-laravel-docker/php/opcache.ini
           db-postgres-docker/postgres/conf.d/shared-buffer.sql
+          db-postgres-docker/postgres/conf.d/10-attendapp-user-db.sql
           reverse-proxy-docker/nginx/default.conf"
           for f in $required; do
             [ -f "$f" ] || { echo "::error::File wajib tidak ditemukan: $f"; exit 1; }

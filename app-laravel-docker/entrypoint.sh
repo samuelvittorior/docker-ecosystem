@@ -62,6 +62,34 @@ if [ -z "${APP_KEY:-}" ]; then
     echo "!! Set APP_KEY permanen di app-laravel-docker/.env.docker"
 fi
 
+# -----------------------------------------------------------------------------
+# Tunggu hingga PostgreSQL & Redis siap menerima koneksi.
+# Container app dapat mulai sebelum database/redis siap (tergantung urutan
+# compose up), jadi butuh mekanisme tunggu agar migrate tidak gagal.
+# -----------------------------------------------------------------------------
+echo "==> Menunggu PostgreSQL & Redis siap..."
+for i in $(seq 1 60); do
+    if pg_isready -h "${DB_HOST:-postgres-db}" -p "${DB_PORT:-5432}" -U "${DB_USERNAME:-postgres}" >/dev/null 2>&1; then
+        echo "==> PostgreSQL siap."
+        break
+    fi
+    if [ "$i" -eq 60 ]; then
+        echo "!! PostgreSQL belum siap setelah 60 detik, lanjutkan tetap saja."
+    fi
+    sleep 1
+done
+
+for i in $(seq 1 30); do
+    if (echo > /dev/tcp/"${REDIS_HOST:-redis}"/"${REDIS_PORT:-6379}") >/dev/null 2>&1; then
+        echo "==> Redis siap."
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "!! Redis belum siap setelah 30 detik, lanjutkan tetap saja."
+    fi
+    sleep 1
+done
+
 # Install dependency Composer bila vendor belum ada (mis. first deploy)
 if [ ! -f "$APP_DIR/vendor/autoload.php" ]; then
     echo "==> vendor/ belum ada, menjalankan composer install..."

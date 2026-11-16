@@ -5,8 +5,8 @@
 # jadi di-exclude dari repo ini.
 # =============================================================================
 
-# Kode aplikasi Laravel -> dikelola di repo sendiri (laravel-test)
-laravel-test/
+# Kode aplikasi Laravel -> dikelola di repo sendiri (attendapp)
+attendapp/
 
 # Environment & secret (jangan pernah di-commit)
 **/.env

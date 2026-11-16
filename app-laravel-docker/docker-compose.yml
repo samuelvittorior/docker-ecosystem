@@ -1,12 +1,12 @@
 services:
   # =========================================================================
-  # PHP-FPM (Alpine) - Backend Laravel
+  # PHP-FPM (Alpine) - Backend Laravel (AttendApp)
   # =========================================================================
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: laravel-app
+    container_name: attendapp-app
     restart: unless-stopped
     working_dir: /var/www/html
     # CATATAN: container sengaja dijalankan sebagai ROOT (default).
@@ -17,14 +17,14 @@ services:
     env_file:
       - .env.docker
     volumes:
-      # Path kode Laravel. Default: repo `laravel-test` sebagai folder SIBLING
+      # Path kode Laravel. Default: repo `attendapp` sebagai folder SIBLING
       # dari `docker-ecosystem` (lihat README "Struktur Direktori").
-      #   ~/projects/docker-ecosystem/app-laravel-docker/  ->  ../../laravel-test
-      #   ~/projects/laravel-test/
-      # Bila struktur folder Anda berbeda (mis. laravel-test di dalam
+      #   ~/projects/docker-ecosystem/app-laravel-docker/  ->  ../../attendapp
+      #   ~/projects/attendapp/
+      # Bila struktur folder Anda berbeda (mis. attendapp di dalam
       # docker-ecosystem), timpa lewat file `app-laravel-docker/.env`:
-      #   LARAVEL_APP_PATH=../laravel-test
-      - ${LARAVEL_APP_PATH:-../../laravel-test}:/var/www/html:delegated
+      #   LARAVEL_APP_PATH=../attendapp
+      - ${LARAVEL_APP_PATH:-../../attendapp}:/var/www/html:delegated
     depends_on:
       - redis
     networks:
@@ -36,10 +36,10 @@ services:
   # =========================================================================
   laravel-nginx:
     image: nginx:alpine
-    container_name: laravel-nginx
+    container_name: attendapp-nginx
     restart: unless-stopped
     volumes:
-      - ${LARAVEL_APP_PATH:-../../laravel-test}:/var/www/html:delegated
+      - ${LARAVEL_APP_PATH:-../../attendapp}:/var/www/html:delegated
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app
@@ -52,7 +52,7 @@ services:
   # =========================================================================
   redis:
     image: redis:alpine
-    container_name: laravel-redis
+    container_name: attendapp-redis
     restart: unless-stopped
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
