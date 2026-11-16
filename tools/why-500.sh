@@ -69,9 +69,76 @@ try { \Illuminate\Support\Facades\Redis::connection()->ping(); echo \"REDIS: OK\
 try { \Session::put(\"hc\", 1); echo \"SESSION: OK\" . PHP_EOL; } catch (Throwable \$e) { echo \"SESSION: GAGAL -> \" . \$e->getMessage() . PHP_EOL; }
 "' 2>&1
 
-hr "7. config:cache — apakah ada APP_KEY/cache basi?"
+hr "7. Deteksi CACHE BASI (bootstrap/cache/config.php lama vs environment)"
+echo "--- isi bootstrap/cache ---"
 docker exec "$APP_FPM" sh -c 'ls -la /var/www/html/bootstrap/cache/ 2>&1' 2>&1
-docker exec "$APP_FPM" sh -c 'grep -ao "APP_KEY[^,]*" /var/www/html/bootstrap/cache/config.php 2>/dev/null | head -3' 2>&1 || true
+# config.php = nilai yang BENAR-BENAR dipakai Laravel. PENTING: selama file ini
+# ada, Laravel MEMAKAI isinya dan MELEWATI .env sepenuhnya
+# (LoadConfiguration: if (file_exists($cached)) { $items = require $cached; ... }),
+# sehingga perubahan .env.docker seolah tidak berefek.
+docker exec "$APP_FPM" php -r '
+$f = "/var/www/html/bootstrap/cache/config.php";
+$keyOk = function ($k) {
+    $k = (string) $k;
+    if ($k === "") { return false; }
+    if (strpos($k, "base64:") === 0) { $k = (string) base64_decode(substr($k, 7), true); }
+    return strlen($k) === 32;
+};
+$envKey  = (string) getenv("APP_KEY");
+$envHost = (string) (getenv("REDIS_HOST") ?: "(kosong)");
+$envPass = (string) getenv("REDIS_PASSWORD");
+$envPass = ($envPass !== "" && $envPass !== "null") ? "ADA" : "KOSONG";
+echo "[env]   APP_KEY valid  : " . ($keyOk($envKey) ? "YA" : "TIDAK -> SEMUA request 500") . PHP_EOL;
+echo "[env]   APP_KEY prefix : " . ($envKey === "" ? "(kosong)" : substr($envKey, 0, 14) . "...") . PHP_EOL;
+echo "[env]   redis.host     : " . $envHost . PHP_EOL;
+echo "[env]   redis.password : " . $envPass . PHP_EOL;
+echo "[env]   RUN_OPTIMIZE   : " . ((string) (getenv("RUN_OPTIMIZE") ?: "(kosong)")) . PHP_EOL;
+echo "[env]   RUN_MIGRATIONS : " . ((string) (getenv("RUN_MIGRATIONS") ?: "(kosong)")) . PHP_EOL;
+if (!is_file($f)) {
+    echo PHP_EOL . ">>> config.php TIDAK ADA -> tidak ada cache basi." . PHP_EOL;
+    echo "    (Normal bila RUN_OPTIMIZE=false; Laravel membaca .env langsung.)" . PHP_EOL;
+    exit(0);
+}
+$c     = require $f;
+$cKey  = (string) ($c["app"]["key"] ?? "");
+$cHost = (string) ($c["database"]["redis"]["default"]["host"] ?? "");
+$cPass = (string) ($c["database"]["redis"]["default"]["password"] ?? "");
+$cDb   = (string) ($c["database"]["redis"]["default"]["database"] ?? "");
+echo PHP_EOL;
+echo "[cache] umur file      : " . date("Y-m-d H:i:s", (int) filemtime($f)) . PHP_EOL;
+echo "[cache] APP_KEY        : " . ($cKey === "" ? "(kosong)" : substr($cKey, 0, 14) . "...") . PHP_EOL;
+echo "[cache] redis.host     : " . $cHost . PHP_EOL;
+echo "[cache] redis.password : " . ($cPass !== "" ? "ADA" : "KOSONG") . PHP_EOL;
+echo "[cache] redis.db       : " . $cDb . PHP_EOL;
+echo "[cache] cache.default  : " . (string) ($c["cache"]["default"] ?? "?") . PHP_EOL;
+echo "[cache] session.driver : " . (string) ($c["session"]["driver"] ?? "?") . PHP_EOL;
+echo "[cache] db.default     : " . (string) ($c["database"]["default"] ?? "?") . PHP_EOL;
+$stale = [];
+if ($cHost !== $envHost) { $stale[] = "redis.host cache=" . $cHost . " != env=" . $envHost; }
+if ($cPass === "" && $envPass === "ADA") { $stale[] = "redis.password cache KOSONG padahal env ADA -> NOAUTH Authentication required"; }
+if ($cKey !== $envKey) { $stale[] = "APP_KEY cache != env -> session/cookie didekripsi dengan kunci lama"; }
+if (!$keyOk($envKey)) { $stale[] = "APP_KEY env tidak valid (butuh base64: 32 byte) -> RuntimeException correct key lengths"; }
+$runOpt = (string) (getenv("RUN_OPTIMIZE") ?: "");
+if ($runOpt !== "true") {
+    $stale[] = "RUN_OPTIMIZE=" . ($runOpt === "" ? "(kosong)" : $runOpt) . " -> cache TIDAK akan pernah dibangun ulang (selama config.php ada, .env diabaikan)";
+}
+echo PHP_EOL;
+if ($stale) {
+    echo ">>> DIAGNOSA: CACHE BASI / APP_KEY SALAH." . PHP_EOL;
+    foreach ($stale as $s) { echo "    - " . $s . PHP_EOL; }
+    echo "    Perbaikan:" . PHP_EOL;
+    echo "      1) samakan REDIS_HOST/REDIS_PASSWORD/APP_KEY di app-laravel-docker/.env.docker" . PHP_EOL;
+    echo "         dengan redis-shared-docker/.env.docker lalu rebuild:" . PHP_EOL;
+    echo "           docker compose up -d --build --force-recreate app" . PHP_EOL;
+    echo "         Entrypoint terbaru otomatis menjalankan optimize:clear SEBELUM config:cache," . PHP_EOL;
+    echo "         jadi nilai basi tidak lagi dipakai ulang." . PHP_EOL;
+    echo "      2) perbaikan cepat tanpa rebuild:" . PHP_EOL;
+    echo "           docker exec attendapp-app sh -c \"cd /var/www/html && rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php\"" . PHP_EOL;
+    echo "           docker compose restart app" . PHP_EOL;
+} else {
+    echo ">>> TIDAK ada cache basi: nilai di config.php == environment. Masalah 500 ada di tempat lain." . PHP_EOL;
+}
+' 2>&1
 
 hr "8. Permission storage & bootstrap/cache"
 docker exec "$APP_FPM" sh -c 'ls -ld /var/www/html/storage /var/www/html/storage/logs /var/www/html/bootstrap/cache 2>&1; echo "--- isi log dir ---"; ls -la /var/www/html/storage/logs 2>&1' 2>&1
@@ -80,5 +147,23 @@ hr "9. HTTP test berlapis"
 docker exec "$APP_NGINX" wget -qS -O /dev/null "http://127.0.0.1/login" 2>&1 | head -8
 curl -s -o /dev/null -w "host :%{http_code}\n" "http://127.0.0.1:$LOCAL_PORT/login" 2>&1 || true
 
+hr "10. PHP-FPM: apakah environment container sampai ke worker HTTP?"
+# Default PHP-FPM `clear_env = yes` membuang SEMUA env container sebelum worker
+# dijalankan. Akibatnya `docker exec app php artisan tinker` (CLI) melihat
+# .env.docker, tetapi permintaan HTTP hanya melihat attendapp/.env (nilai lokal
+# 127.0.0.1) -> halaman 500 walau CLI melaporkan DB/Redis benar.
+clear_env_cfg=$(docker exec "$APP_FPM" sh -c 'grep -h "^clear_env" /usr/local/etc/php-fpm.d/*.conf /usr/local/etc/php-fpm.conf 2>/dev/null | tail -n 1' 2>/dev/null)
+case "$clear_env_cfg" in
+    *no) echo "  OK: ($clear_env_cfg) -> environment container diteruskan ke worker HTTP." ;;
+    "")  echo "  !! clear_env TIDAK diset -> default PHP-FPM = yes -> env container DIBUANG untuk HTTP." ;;
+    *)   echo "  !! $clear_env_cfg -> env container DIBUANG untuk HTTP." ;;
+esac
+echo "  Perbaikan: pastikan app-laravel-docker/php/www.conf memuat 'clear_env = no',"
+echo "  lalu: docker compose up -d --build --force-recreate app  (www.conf di-COPY ke image)."
+if [ -f "$APP_PATH/.env" ]; then
+    echo "--- nilai berisiko di attendapp/.env (hanya terpakai bila env container tidak sampai) ---"
+    grep -nE '^(DB_HOST|REDIS_HOST|REDIS_PASSWORD|CACHE_DRIVER|SESSION_DRIVER|APP_ENV)=' "$APP_PATH/.env" 2>&1 || true
+fi
+
 hr "SELESAI"
-echo "Kirim seluruh output, terutama bagian 1, 2, 3, dan 6."
+echo "Kirim seluruh output, terutama bagian 1, 2, 3, 6, 7, dan 10."

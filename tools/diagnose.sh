@@ -79,7 +79,10 @@ else
 fi
 
 hr "13. Laravel: coba route:cache (aman, hanya menulis bootstrap/cache)"
-docker exec "$APP_FPM" sh -c 'cd /var/www/html && php artisan route:cache 2>&1 | tail -5' 2>&1 || true
+# route:clear lebih dulu. Bila routes-v7.php LAMA masih ada, route:cache gagal
+# dengan "buildRouteCacheFile(): ... CompiledRouteCollection given" -- itu
+# masalah CACHE BASI, bukan masalah rute aplikasi.
+docker exec "$APP_FPM" sh -c 'cd /var/www/html && php artisan route:clear >/dev/null 2>&1; php artisan route:cache 2>&1 | tail -5' 2>&1 || true
 
 hr "14. Log terakhir: app (60 baris)"
 docker compose -f "$APP_COMPOSE" logs --tail=60 app 2>&1

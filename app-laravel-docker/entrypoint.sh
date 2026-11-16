@@ -68,11 +68,40 @@ fi
 # "No application encryption key has been specified".
 # Sebaiknya set permanen di app-laravel-docker/.env.docker.
 # -----------------------------------------------------------------------------
-if [ -z "${APP_KEY:-}" ]; then
-    APP_KEY="base64:$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+#
+# PENTING: APP_KEY harus punya panjang yang BENAR untuk AES-256-CBC.
+# Laravel menerima dua bentuk:
+#   a) "base64:" + base64 dari TEPAT 32 byte   (paling aman)
+#   b) 32 karakter mentah
+# Placeholder seperti "SI_SECRET_APIKEY_XXXX" hanya 25 karakter sehingga
+# Laravel melempar:
+#   RuntimeException: The only supported ciphers are AES-128-CBC and
+#   AES-256-CBC with the correct key lengths.
+# dan SEMUA request berakhir HTTP 500 (cookie & session tidak bisa dienkripsi).
+# -----------------------------------------------------------------------------
+app_key_valid() {
+    php -r '
+        $k = (string) (getenv("APP_KEY") ?: "");
+        if ($k === "") { exit(1); }
+        if (strpos($k, "base64:") === 0) { $k = (string) base64_decode(substr($k, 7), true); }
+        exit(strlen($k) === 32 ? 0 : 1);
+    ' >/dev/null 2>&1
+}
+
+if ! app_key_valid; then
+    if [ -n "${APP_KEY:-}" ]; then
+        echo "!! APP_KEY terisi tetapi TIDAK VALID (butuh 'base64:' 32 byte atau 32 karakter)."
+    else
+        echo "!! APP_KEY kosong."
+    fi
+    # Dibuat acak & benar-benar valid (32 byte). TIDAK memakai placeholder
+    # statis, karena kunci statis yang bocor = semua instalasi bisa saling
+    # membaca cookie/session terenkripsi.
+    APP_KEY="base64:$(php -r 'echo base64_encode(random_bytes(32));')"
     export APP_KEY
-    echo "!! APP_KEY kosong -> dibuat SEMENTARA (session/cookie hangus tiap restart)."
-    echo "!! Set APP_KEY permanen di app-laravel-docker/.env.docker"
+    echo "!! Dipakai APP_KEY SEMENTARA -> session & cookie lama hangus setiap restart."
+    echo "!! Set permanen di app-laravel-docker/.env.docker (buat: php artisan key:generate --show):"
+    echo "!!   APP_KEY=$APP_KEY"
 fi
 
 # -----------------------------------------------------------------------------
@@ -100,26 +129,43 @@ done
 
 echo "==> Menunggu Redis siap..."
 for i in $(seq 1 30); do
-    if php -r '
+    # Kode keluar dari pemeriksa di bawah:
+    #   0 = Redis hidup DAN (bila ada password) AUTH berhasil
+    #   1 = belum bisa dihubungi -> tunggu & ulangi
+    #   2 = Redis HIDUP tetapi AUTH DITOLAK (password beda) -> tidak ada
+    #       gunanya mengulang, laporkan sekarang.
+    redis_rc=0
+    php -r '
         $host = getenv("REDIS_HOST") ?: "redis-shared";
         $port = (int) (getenv("REDIS_PORT") ?: 6379);
         $pass = getenv("REDIS_PASSWORD");
         $fp = @fsockopen($host, $port, $errno, $errstr, 1.0);
         if (!$fp) { exit(1); }
         if ($pass && $pass !== "null") {
-            // Redis dengan requirepass membalas "-NOAUTH" bila belum login;
-            // itu artinya server HIDUP, jadi dianggap siap.
             fwrite($fp, "AUTH " . $pass . "\r\n");
             $line = (string) fgets($fp, 128);
             fclose($fp);
-            exit(strpos($line, "+OK") === 0 ? 0 : 0);
+            // "-NOAUTH Authentication required" / "-WRONGPASS ..." =
+            // server hidup tapi kredensial kita SALAH.
+            exit(strpos($line, "+OK") === 0 ? 0 : 2);
         }
         fclose($fp);
         exit(0);
-    ' >/dev/null 2>&1; then
+    ' >/dev/null 2>&1 || redis_rc=$?
+
+    if [ "$redis_rc" -eq 0 ]; then
         echo "==> Redis siap."
         break
     fi
+
+    if [ "$redis_rc" -eq 2 ]; then
+        echo "!! Redis HIDUP tetapi AUTH DITOLAK (balasan -NOAUTH/-WRONGPASS)."
+        echo "!! REDIS_PASSWORD di app-laravel-docker/.env.docker TIDAK sama dengan"
+        echo "!! requirepass di redis-shared-docker/.env.docker."
+        echo "!! Laravel akan melempar 'RedisException: NOAUTH Authentication required' -> HTTP 500."
+        break
+    fi
+
     if [ "$i" -eq 30 ]; then
         echo "!! Redis (${REDIS_HOST:-redis-shared}:${REDIS_PORT:-6379}) belum siap setelah 30 detik, lanjutkan tetap saja."
         echo "!! Pastikan compose redis-shared-docker sudah dijalankan lebih dulu."
@@ -159,6 +205,48 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "$FPM_USER:$FPM_GROUP" "$APP_DIR/storage" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
 fi
 
+# -----------------------------------------------------------------------------
+# WAJIB: buang cache LAMA sebelum migrate & optimize.
+#
+# Laravel SELALU memakai bootstrap/cache/config.php bila file itu ada, dan
+# melewati .env sama sekali. Bukti di framework (v8.83):
+#   Illuminate\Foundation\Bootstrap\LoadConfiguration::bootstrap()
+#     if (file_exists($cached = $app->getCachedConfigPath())) {
+#         $items = require $cached; $loadedFromCache = true;
+#     }
+#     if (! isset($loadedFromCache)) { $this->loadConfigurationFiles(...); }
+# Jadi file cache yang BASI = aplikasi memakai nilai lama (host/password Redis,
+# APP_KEY, koneksi DB) walaupun .env.docker sudah diubah.
+#
+# Kenapa file basi bisa bertahan?
+#   * RUN_OPTIMIZE tidak "true" -> cache lama tidak pernah dibangun ulang;
+#   * folder aplikasi di-copy dari komputer lokal. `bootstrap/cache/*.php`
+#     ada di .gitignore aplikasi, jadi `git pull` TIDAK menghapusnya;
+#   * proses pembuat cache gagal/di-skip.
+# Gejala khas: `php artisan tinker` menampilkan redis.host = `redis` (nilai
+# lama) padahal env container = `redis-shared`; error NOAUTH; HTTP 500.
+#
+# `route:cache` pun gagal bila routes-v7.php basi masih bisa dimuat ulang:
+#   TypeError: RouteCacheCommand::buildRouteCacheFile(): Argument #1 ($routes)
+#   must be of type RouteCollection, CompiledRouteCollection given
+# -----------------------------------------------------------------------------
+if [ -f "$APP_DIR/vendor/autoload.php" ]; then
+    echo "==> Menghapus cache lama (config/route/view/cache)..."
+    php artisan optimize:clear >/dev/null 2>&1 || true
+
+    # Jaring pengaman: kalau optimize:clear gagal menghapus (mis. file milik user
+    # lain / permission), hapus langsung. Dua file ini inti masalahnya:
+    #   config.php     -> sumber nilai config basi (dipakai Laravel, .env diabaikan)
+    #   routes-v7.php  -> sumber TypeError saat route:cache
+    # Keduanya akan dibuat ulang oleh blok RUN_OPTIMIZE di bawah.
+    for stale in config.php routes-v7.php; do
+        if [ -f "$APP_DIR/bootstrap/cache/$stale" ]; then
+            rm -f "$APP_DIR/bootstrap/cache/$stale" 2>/dev/null \
+                && echo "    dihapus paksa (basi): bootstrap/cache/$stale"
+        fi
+    done
+fi
+
 # Migrasi database otomatis (opsional)
 if [ "$RUN_MIGRATIONS" = "true" ]; then
     echo "==> Menjalankan migrasi database..."
@@ -168,9 +256,64 @@ fi
 # Optimasi cache untuk produksi (opsional)
 if [ "$RUN_OPTIMIZE" = "true" ]; then
     echo "==> Membuat cache konfigurasi/route/view..."
-    php artisan config:cache || true
-    php artisan route:cache  || true
-    php artisan view:cache   || true
+    # Cache lama sudah dibersihkan di atas, jadi di sini selalu ditulis cache
+    # BARU dari .env.docker yang berlaku saat ini.
+    # (`config:cache`/`route:cache` memang sudah memanggil `*:clear` sendiri,
+    #  TETAPI hanya bila langkah ini benar-benar dijalankan -- dan langkah ini
+    #  hanya dijalankan bila RUN_OPTIMIZE=true.)
+    php artisan config:cache || echo "!! config:cache gagal"
+    php artisan route:cache  || echo "!! route:cache gagal (rute tetap jalan tanpa cache)"
+    php artisan view:cache   || echo "!! view:cache gagal"
+
+    # Cache baru ditulis sebagai root -> kembalikan kepemilikannya agar
+    # www-data bisa menimpanya pada deploy berikutnya.
+    if [ "$(id -u)" = "0" ]; then
+        chown -R "$FPM_USER:$FPM_GROUP" "$APP_DIR/storage" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
+    fi
+
+    # ---------------------------------------------------------------------
+    # Uji cepat: laporkan nilai Redis/DB yang BENAR-BENAR dipakai Laravel
+    # (hasil merge .env.docker + config cache), bukan tebakan dari .env.
+    # Bila muncul "Redis: GAGAL" di sini, penyebab HTTP 500 sudah pasti.
+    # ---------------------------------------------------------------------
+    if [ -f "$APP_DIR/vendor/autoload.php" ]; then
+        cat > /tmp/app-selfcheck.php <<'PHP'
+<?php
+require '/var/www/html/vendor/autoload.php';
+$app = require '/var/www/html/bootstrap/app.php';
+try {
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+} catch (Throwable $e) {
+    echo "    bootstrap GAGAL -> " . get_class($e) . ": " . $e->getMessage() . "\n";
+    exit(0);
+}
+printf(
+    "    config efektif -> redis.host=%s redis.db=%s cache=%s session=%s db=%s\n",
+    config('database.redis.default.host'),
+    config('database.redis.default.database'),
+    config('cache.default'),
+    config('session.driver'),
+    config('database.default')
+);
+$probes = [
+    // Mengenkripsi sungguhan: gagal bila APP_KEY salah panjang
+    // ("The only supported ciphers are AES-128-CBC and AES-256-CBC with the
+    //  correct key lengths") -> inilah penyebab 500 yang sulit dilacak.
+    'APP_KEY'  => function () { Illuminate\Support\Facades\Crypt::encryptString('ok'); },
+    'Redis'    => function () { Illuminate\Support\Facades\Redis::connection()->ping(); },
+    'Database' => function () { Illuminate\Support\Facades\DB::connection()->getPdo(); },
+];
+foreach ($probes as $label => $probe) {
+    try {
+        $probe();
+        echo "    $label: OK\n";
+    } catch (Throwable $e) {
+        echo "    $label: GAGAL -> " . $e->getMessage() . "\n";
+    }
+}
+PHP
+        php /tmp/app-selfcheck.php 2>&1 || echo "!! self-check gagal dijalankan"
+    fi
 fi
 
 echo "==> Entrypoint selesai. Menjalankan: $*"

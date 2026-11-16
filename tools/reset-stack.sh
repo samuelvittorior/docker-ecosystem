@@ -104,6 +104,14 @@ catch (Throwable \$e) { echo \"  !! GAGAL: \" . \$e->getMessage() . PHP_EOL; }
 hr "8. Log singkat"
 docker compose -f reverse-proxy-docker/docker-compose.yml logs --tail=15 "$PROXY_CONTAINER" 2>&1
 
+hr "8b. Self-check entrypoint (config efektif + Redis/DB)"
+# Entrypoint menuliskan nilai config yang BENAR-BENAR dipakai Laravel beserta
+# status Redis & Database. Kalau HTTP masih 500, baris-baris ini biasanya
+# sudah menunjuk penyebabnya (mis. NOAUTH / APP_KEY tidak valid).
+docker compose -f app-laravel-docker/docker-compose.yml logs app 2>&1 \
+    | grep -aE 'config efektif|Redis:|Redis \(via|Database:|GAGAL|AUTH DITOLAK|bootstrap GAGAL|gagal' | tail -n 15 \
+    || echo "  (belum ada baris self-check: pastikan RUN_OPTIMIZE=true dan image sudah di-build ulang)"
+
 hr "SELESAI"
 echo "Buka: http://<IP_VPS>:$LOCAL_PORT/"
 echo
