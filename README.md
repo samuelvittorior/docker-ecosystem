@@ -564,6 +564,133 @@ docker system df
 
 ---
 
+## âš¡ Optimasi Performa (gzip, HTTP/2, HTTPS, cache)
+
+Halaman Laravel ini memuat **ratusan file JS/CSS (>14 MB mentah)**. Yang membuatnya
+terasa cepat di shared hosting biasanya bukan PHP-nya, melainkan 4 hal di bawah ini â€”
+dan semuanya sudah disiapkan di repo ini:
+
+| # | Hal | Status di repo | Dampak |
+|---|---|---|---|
+| 1 | **Kompresi gzip** | aktif di `app-laravel-docker/nginx/default.conf` **dan** `reverse-proxy-docker/nginx/default.conf` | JS/CSS/HTML mengecil 65â€“80% |
+| 2 | **Cache aset 30 hari** | `Cache-Control: public, max-age=2592000, immutable` | kunjungan berikutnya tidak mengunduh ulang |
+| 3 | **HTTPS + HTTP/2** | template `nginx/extra/attendapp-ssl.conf.example` + `tools/enable-https.sh` | aset diunduh paralel (multiplexing), bukan berderet |
+| 4 | **Cache produksi Laravel** | `RUN_OPTIMIZE=true` di `.env.docker` (config/route/view cache) | config & Blade tidak di-parse ulang tiap request |
+
+> **Catatan penting:** direktif `no-transform` pada header `Cache-Control` aset
+> **dihapus**. Direktif itu melarang proxy/CDN mengubah respons â€” termasuk
+> mengompresinya â€” sehingga kompresi otomatis Cloudflare pun ikut mati.
+
+### 1) Cek apakah gzip benar-benar aktif
+
+```bash
+curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8101/form/css/style.css | grep -i content-encoding
+# harus muncul: content-encoding: gzip
+```
+
+Kalau tidak muncul, config nginx belum dimuat â€” nginx **tidak** reload otomatis
+untuk file yang di-bind-mount:
+
+```bash
+cd reverse-proxy-docker && docker compose up -d --force-recreate
+cd ../app-laravel-docker && docker compose up -d --force-recreate laravel-nginx
+```
+
+### 2) Mengaktifkan HTTPS + HTTP/2 (Let's Encrypt)
+
+Prasyarat: domain sudah mengarah (A record) ke IP VPS, port 80/443 terbuka, dan
+`certbot` terpasang (`sudo apt-get install -y certbot`).
+
+```bash
+cd ~/projects/docker-ecosystem
+bash tools/enable-https.sh app.attendapp.com admin@attendapp.com
+```
+
+Skrip ini: menghentikan proxy sementara â†’ meminta sertifikat â†’ menyalin ke
+`reverse-proxy-docker/nginx/certs/` â†’ menulis
+`reverse-proxy-docker/nginx/extra/attendapp-ssl.conf` (blok 443 + redirect
+httpâ†’https + `http2 on`) â†’ menjalankan ulang proxy â†’ menguji hasilnya.
+
+Setelah HTTPS berjalan, ubah di **dua** tempat:
+
+```ini
+# attendapp/.env  dan  app-laravel-docker/.env.docker
+APP_URL=https://app.attendapp.com
+APP_FORCE_HTTPS=true
+```
+
+```bash
+cd app-laravel-docker && docker compose up -d --force-recreate app
+```
+
+> Blok SSL **sengaja dipisah** ke folder `nginx/extra/`. Kalau blok 443 ditulis
+> langsung di `default.conf` sebelum sertifikat ada, nginx gagal start
+> (`cannot load certificate`) dan **semua** domain di proxy ikut mati.
+> File `*.example` tidak pernah dimuat nginx.
+
+---
+
+
+### 3) Memastikan cache produksi Laravel benar-benar dibuat
+
+```bash
+docker exec attendapp-app ls -la /var/www/html/bootstrap/cache/
+# harus ada: config.php  dan  routes-v7.php
+docker exec attendapp-app ls /var/www/html/storage/framework/views | wc -l
+# harus > 0
+```
+
+Kalau kosong: pastikan `RUN_OPTIMIZE=true` di `app-laravel-docker/.env.docker`,
+lalu `docker compose up -d --force-recreate app`.
+
+### 4) Menyesuaikan PostgreSQL dengan RAM VPS
+
+Setelan memori PostgreSQL **tidak boleh** lebih besar dari RAM VPS. Cek RAM lalu
+pilih profil di `db-postgres-docker/.env.docker`:
+
+```bash
+free -h    # mis. total 4 GB -> POSTGRES_TUNING=medium
+```
+
+| `POSTGRES_TUNING` | RAM VPS | shared_buffers | work_mem | max_connections |
+|---|---|---|---|---|
+| `small` | 1â€“2 GB | 256 MB | 8 MB | 30 |
+| `medium` | 4 GB | 1024 MB | 16 MB | 50 |
+| `large` (default) | 6â€“8 GB | 1536 MB | 32 MB | 100 |
+| `custom` | bebas | dari `POSTGRES_TUNING_*` | | |
+
+> `shared-buffer.sql` hanya dijalankan **saat volume `postgres-data` masih
+> kosong**. Untuk menerapkan ke database yang sudah ada, jalankan isi file itu
+> lewat psql:
+> ```bash
+> docker exec -i postgres-db psql -U postgres -d attendapp \
+>   < db-postgres-docker/postgres/conf.d/shared-buffer.sql
+> docker restart postgres-db        # shared_buffers butuh restart, bukan reload
+> ```
+
+### 5) Ukur, jangan menebak
+
+```bash
+cd ~/projects/docker-ecosystem
+bash tools/perf-check.sh
+```
+
+Skrip ini mencetak: pemakaian RAM/swap, `docker stats`, hasil tes gzip, **TTFB
+dari dalam VPS** (memisahkan masalah aplikasi vs jaringan), status cache
+config/route/view, OPcache, setelan PostgreSQL, dan memori Redis.
+
+Cara membaca hasilnya:
+
+- **TTFB dari dalam VPS kecil (<300 ms)** tetapi dari laptop terasa lambat â†’
+  masalah **jaringan/aset**: pasang CDN (Cloudflare) + aktifkan HTTP/2, atau
+  pertimbangkan VPS region Singapura/Jakarta.
+- **TTFB dari dalam VPS besar (>800 ms)** â†’ masalah **aplikasi/DB**: cek poin 3
+  dan 4 di atas.
+- **Swap terpakai > 0** â†’ RAM kurang: turunkan `POSTGRES_TUNING`.
+
+---
+
+
 ## 🛠 Tools Bantu (opsional)
 
 Dua skrip di `tools/` untuk mempermudah operasional di VPS:
@@ -572,11 +699,15 @@ Dua skrip di `tools/` untuk mempermudah operasional di VPS:
 |---|---|
 | `tools/diagnose.sh` | **Read-only.** 16 pemeriksaan: status container, port, anggota `shared-network`, config nginx yang benar-benar dimuat (`nginx -T`), tes DNS & HTTP berlapis, cek PHP-FPM, tail log. Jalankan saat ada 502. |
 | `tools/reset-stack.sh` | Membersihkan container sisa bernama lama, recreate reverse proxy, build & jalankan stack aplikasi, lalu verifikasi DNS + HTTP. **Tidak** menghapus volume data. |
+| `tools/perf-check.sh` | **Read-only.** Cek penyebab lambat dengan angka: RAM/swap, `docker stats`, apakah gzip aktif, **TTFB dari dalam VPS**, cache config/route/view, OPcache, setelan PostgreSQL, memori Redis. |
+| `tools/enable-https.sh` | Mengaktifkan **HTTPS + HTTP/2** (Let's Encrypt): buat sertifikat â†’ salin ke `nginx/certs/` â†’ tulis `nginx/extra/attendapp-ssl.conf` â†’ recreate proxy â†’ uji. Idempoten (aman dijalankan ulang untuk perpanjangan). |
 
 ```bash
 cd ~/projects/docker-ecosystem
-bash tools/diagnose.sh      # kalau ada masalah
+bash tools/diagnose.sh      # kalau ada masalah (502, 404, dll)
+bash tools/perf-check.sh    # kalau terasa lambat
 bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
+bash tools/enable-https.sh app.attendapp.com admin@attendapp.com   # aktifkan HTTPS
 ```
 
 > **Penting — nama service ≠ nama DNS.** Nama yang bisa di-resolve antar
@@ -617,6 +748,10 @@ bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
 | **`attendapp-nginx could not be resolved (3: Host not found)` + 502** | (a) container `attendapp-nginx` tidak berjalan / tidak ikut `shared-network`, atau (b) sisa container bernama lama masih ada & stack belum di-recreate setelah service di-rename | jalankan `bash tools/reset-stack.sh` (membersihkan container lama + recreate berurutan + cek DNS). Pastikan `app-laravel-docker/docker-compose.yml` memuat `aliases: [attendapp-nginx]` pada `shared-network` |
 | **`http://IP_VPS:8101` tidak bisa dibuka / connection refused** | port belum dipetakan, firewall menutup, atau container lama belum di-recreate | pastikan `ports:` berisi `"${APP_HTTP_PORT:-8101}:8080"`, lalu `docker compose up -d --force-recreate reverse-proxy`; buka firewall `sudo ufw allow 8101/tcp`; cek `ss -tlnp \| grep 8101` |
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
+| **Aplikasi terasa lambat, padahal `php artisan` cepat** | gzip/HTTP2 belum aktif, atau aset tidak ter-cache, atau latency datacenter | jalankan `bash tools/perf-check.sh`. Bila TTFB dari dalam VPS kecil (<300 ms) tetapi dari browser lambat -> masalah jaringan/aset: aktifkan HTTP/2 (`tools/enable-https.sh`) dan/atau pasang CDN |
+| **Aset `.css`/`.js` terkirim ukuran penuh (tidak terkompresi)** | container nginx belum di-recreate setelah `gzip` ditambahkan; atau CDN memblokir karena header `no-transform` | `docker compose up -d --force-recreate` di `app-laravel-docker` dan `reverse-proxy-docker`; cek `curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8101/form/css/style.css \| grep -i content-encoding` |
+| **`nginx: [emerg] cannot load certificate`** setelah mengaktifkan HTTPS | file `.crt`/`.key` tidak ada di `reverse-proxy-docker/nginx/certs/` | jalankan `bash tools/enable-https.sh <domain> <email>`; bila sertifikat sudah tidak dipakai, hapus `nginx/extra/attendapp-ssl.conf` lalu recreate proxy |
+| **VPS terasa lambat + `swap` terpakai** | `POSTGRES_TUNING` terlalu besar untuk RAM VPS | turunkan profil di `db-postgres-docker/.env.docker` (`large` -> `medium`/`small`), lalu terapkan lewat psql + `docker restart postgres-db` |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
 | **pgAdmin: `connection to server at "127.0.0.1", port ... failed: server closed the connection unexpectedly`** | (a) SSH Tunnel tidak dicentang, atau (b) port 5432 belum di-bind ke `127.0.0.1` di VPS | centang *Use SSH tunneling* + isi Tunnel host = IP VPS; lalu di VPS `docker compose up -d --force-recreate postgres` dan cek `ss -tlnp \| grep 5432` |
 | **pgAdmin: `could not translate host name "postgres-db"`** | Connection â†’ Host diisi nama container, padahal tunnel keluar di host VPS | ganti Connection â†’ Host menjadi `127.0.0.1` |
@@ -633,10 +768,17 @@ bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
   sebelum online. Jika repo publik, pertimbangkan memakai `.env.docker.example`.
 - **PostgreSQL** di-bind ke `127.0.0.1:5432` (loopback saja). Jangan diganti menjadi
   `5432:5432` karena itu membuka database ke internet. Akses dari luar memakai SSH tunnel.
-- **Kustomisasi RAM:** nilai di `db-postgres-docker/postgres/conf.d/shared-buffer.sql`
-  dioptimalkan untuk VPS Â±6 GB. Sesuaikan bila berbeda.
-- **HTTPS:** blok SSL di `reverse-proxy-docker/nginx/default.conf` masih dikomentari.
-  Aktifkan setelah punya sertifikat (mis. Let's Encrypt/Certbot).
+- **Kustomisasi RAM:** profil memori PostgreSQL diatur lewat **satu baris**
+  `POSTGRES_TUNING` (`small|medium|large|custom`) di `db-postgres-docker/.env.docker`,
+  yang dibaca oleh `db-postgres-docker/postgres/conf.d/shared-buffer.sql`.
+  Default `large` = VPS Â±6 GB (shared_buffers 1536 MB, work_mem 32 MB).
+- **HTTPS:** blok SSL **dipisah** ke `reverse-proxy-docker/nginx/extra/` (template
+  `attendapp-ssl.conf.example`) supaya `default.conf` tetap valid sebelum
+  sertifikat ada. Aktifkan dengan `bash tools/enable-https.sh <domain> <email>`
+  (lihat bagian **Optimasi Performa**).
+- **Kompresi gzip** aktif di kedua nginx. Jika aset masih terkirim mentah,
+  container belum di-recreate (`nginx` tidak reload otomatis untuk file yang
+  di-bind-mount).
 - **Penting saat update kode aplikasi:** `git pull` di VPS tidak menghapus `vendor/`
   yang isinya tidak lengkap/korup (vendor di-`.gitignore`). Bila `vendor/autoload.php`
   ada padahal paketnya tidak lengkap, entrypoint menganggap instalasi sudah selesai.

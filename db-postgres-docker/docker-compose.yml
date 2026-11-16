@@ -6,6 +6,10 @@ services:
     image: postgres:15-alpine
     container_name: postgres-db
     restart: unless-stopped
+    # Shared memory untuk operasi paralel (parallel query, hash join besar).
+    # Default Docker hanya 64MB -> query rekap bisa gagal "could not resize
+    # shared memory segment". 256MB cukup untuk PostgreSQL 15 di VPS kecil.
+    shm_size: 256mb
     env_file:
       - .env.docker
     volumes:

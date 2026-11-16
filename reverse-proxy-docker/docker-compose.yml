@@ -15,6 +15,10 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      # Konfigurasi opsional yang dimuat lewat `include /etc/nginx/extra/*.conf`
+      # di akhir nginx/default.conf -- dipakai oleh tools/enable-https.sh untuk
+      # mengaktifkan HTTPS/HTTP2 tanpa mengedit file utama.
+      - ./nginx/extra:/etc/nginx/extra:ro
     networks:
       - shared-network
 

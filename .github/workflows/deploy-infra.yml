@@ -41,9 +41,15 @@ jobs:
           # bisa di-resolve saat `nginx -t`. Tanpa ini nginx -t gagal dengan
           # "host not found in upstream" walau konfigurasinya benar.
           echo "==> reverse-proxy-docker/nginx/default.conf"
+          # Folder extra di-mount karena default.conf memuat
+          # `include /etc/nginx/extra/*.conf` (konfigurasi SSL opsional hasil
+          # tools/enable-https.sh). Tanpa mount, folder itu tidak ada di
+          # container dan `nginx -t` bisa gagal.
           docker run --rm \
             --add-host attendapp-nginx:127.0.0.1 \
             -v "$PWD/reverse-proxy-docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$PWD/reverse-proxy-docker/nginx/extra:/etc/nginx/extra:ro" \
+            -v "$PWD/reverse-proxy-docker/nginx/certs:/etc/nginx/certs:ro" \
             nginx:alpine nginx -t
 
           echo "==> app-laravel-docker/nginx/default.conf"
@@ -63,7 +69,10 @@ jobs:
           db-postgres-docker/postgres/conf.d/shared-buffer.sql
           db-postgres-docker/postgres/conf.d/10-attendapp-user-db.sql
           redis-shared-docker/redis/redis.conf
-          reverse-proxy-docker/nginx/default.conf"
+          reverse-proxy-docker/nginx/default.conf
+          reverse-proxy-docker/nginx/extra/attendapp-ssl.conf.example
+          tools/perf-check.sh
+          tools/enable-https.sh"
           for f in $required; do
             [ -f "$f" ] || { echo "::error::File wajib tidak ditemukan: $f"; exit 1; }
           done

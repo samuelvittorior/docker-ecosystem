@@ -1,0 +1,76 @@
+# =============================================================================
+# HTTPS + HTTP/2 untuk AttendApp (TEMPLATE)
+#
+# File ini TIDAK dimuat nginx (hanya *.conf di folder ini yang dimuat).
+# Jangan dipakai manual: jalankan skrip yang mengisinya otomatis:
+#
+#     bash tools/enable-https.sh <domain> <email>
+#
+# Skrip tersebut membuat sertifikat Let's Encrypt, menyalinnya ke
+# nginx/certs/, lalu menulis versi file ini (tanpa akhiran .example) dengan
+# nama domain & sertifikat yang benar.
+# =============================================================================
+
+# Redirect seluruh trafik http:// ke https:// untuk domain ini.
+server {
+    listen 80;
+    server_name __DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name __DOMAIN__;
+
+    # HTTP/2. Sejak nginx 1.25.1 HTTP/2 diaktifkan lewat directive `http2 on`
+    # (bentuk `listen 443 ssl http2` sudah usang dan memunculkan warning).
+    http2 on;
+
+    ssl_certificate     /etc/nginx/certs/__DOMAIN__.crt;
+    ssl_certificate_key /etc/nginx/certs/__DOMAIN__.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # HSTS. Aktif 1 tahun (termasuk subdomain). Hapus baris ini bila nanti
+    # domain ingin dipakai kembali lewat http (sulit dibatalkan browser).
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    set $attendapp_upstream "http://attendapp-nginx:80";
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass $attendapp_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2)$ {
+        proxy_pass $attendapp_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        add_header Cache-Control "public, max-age=2592000, immutable" always;
+    }
+}
