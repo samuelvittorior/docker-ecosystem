@@ -19,6 +19,19 @@ export COMPOSER_ALLOW_SUPERUSER=1
 export COMPOSER_HOME="${COMPOSER_HOME:-/tmp/composer}"
 mkdir -p "$COMPOSER_HOME"
 
+# -----------------------------------------------------------------------------
+# Git "dubious ownership".
+# Folder aplikasi di-bind-mount dari VPS dan dimiliki user HOST (mis. user
+# `ubuntu`/`deploy`), sedangkan proses di container berjalan sebagai ROOT.
+# Git modern menolak bekerja pada repo milik UID lain:
+#   fatal: detected dubious ownership in repository at '/var/www/html'
+# Perintah di bawah membuat Git mempercayai folder tersebut. Aman karena
+# container ini memang berisi satu aplikasi milik kita sendiri.
+# -----------------------------------------------------------------------------
+if command -v git >/dev/null 2>&1; then
+    git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
+fi
+
 # User yang menjalankan worker PHP-FPM (harus sama dengan php/www.conf).
 FPM_USER="${FPM_USER:-www-data}"
 FPM_GROUP="${FPM_GROUP:-www-data}"
@@ -66,8 +79,14 @@ fi
 # Tunggu hingga PostgreSQL & Redis siap menerima koneksi.
 # Container app dapat mulai sebelum database/redis siap (tergantung urutan
 # compose up), jadi butuh mekanisme tunggu agar migrate tidak gagal.
+#
+# CATATAN REDIS: pengecekan TIDAK memakai trik bash `echo > /dev/tcp/host/port`
+# karena image ini berbasis Alpine dan /bin/sh = BusyBox ash yang TIDAK
+# mendukung /dev/tcp. Akibatnya pengecekan selalu gagal walau Redis hidup
+# (gejala: "!! Redis belum siap setelah 30 detik"). Dipakai PHP CLI + fsockopen
+# yang pasti tersedia di image ini.
 # -----------------------------------------------------------------------------
-echo "==> Menunggu PostgreSQL & Redis siap..."
+echo "==> Menunggu PostgreSQL siap..."
 for i in $(seq 1 60); do
     if pg_isready -h "${DB_HOST:-postgres-db}" -p "${DB_PORT:-5432}" -U "${DB_USERNAME:-postgres}" >/dev/null 2>&1; then
         echo "==> PostgreSQL siap."
@@ -79,8 +98,15 @@ for i in $(seq 1 60); do
     sleep 1
 done
 
+echo "==> Menunggu Redis siap..."
 for i in $(seq 1 30); do
-    if (echo > /dev/tcp/"${REDIS_HOST:-redis}"/"${REDIS_PORT:-6379}") >/dev/null 2>&1; then
+    if php -r '
+        $host = getenv("REDIS_HOST") ?: "redis";
+        $port = (int) (getenv("REDIS_PORT") ?: 6379);
+        $fp = @fsockopen($host, $port, $errno, $errstr, 1.0);
+        if ($fp) { fclose($fp); exit(0); }
+        exit(1);
+    ' >/dev/null 2>&1; then
         echo "==> Redis siap."
         break
     fi
@@ -90,16 +116,36 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-# Install dependency Composer bila vendor belum ada (mis. first deploy)
+# Install dependency Composer bila vendor belum ada (mis. first deploy).
+# Bila GAGAL, hentikan dengan pesan jelas: kalau dibiarkan, PHP-FPM tetap
+# dijalankan tanpa autoloader dan semua request berakhir "500 / Class not
+# found", sementara Docker me-restart container terus-menerus.
 if [ ! -f "$APP_DIR/vendor/autoload.php" ]; then
     echo "==> vendor/ belum ada, menjalankan composer install..."
-    composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+    if ! composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist; then
+        echo "!! composer install GAGAL. Container dihentikan agar error terlihat"
+        echo "!! (tidak restart-loop). Periksa pesan Composer di atas, biasanya:"
+        echo "!!   * composer.lock tidak kompatibel dengan PHP container"
+        echo "!!   * koneksi internet container terputus"
+        exit 1
+    fi
 fi
 
 # Buat symlink storage bila belum ada
 if [ ! -L "$APP_DIR/public/storage" ]; then
     echo "==> Membuat symlink storage..."
     php artisan storage:link || true
+fi
+
+# -----------------------------------------------------------------------------
+# Perbaiki ulang permission SETELAH composer install.
+# Composer dijalankan sebagai root sehingga file yang baru dibuat (termasuk
+# bootstrap/cache/packages.php & services.php) dimiliki root. Worker PHP-FPM
+# berjalan sebagai www-data dan harus bisa menimpanya saat config/route cache
+# dibuat ulang.
+# -----------------------------------------------------------------------------
+if [ "$(id -u)" = "0" ]; then
+    chown -R "$FPM_USER:$FPM_GROUP" "$APP_DIR/storage" "$APP_DIR/bootstrap/cache" 2>/dev/null || true
 fi
 
 # Migrasi database otomatis (opsional)

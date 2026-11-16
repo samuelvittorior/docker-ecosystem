@@ -49,10 +49,15 @@ services:
 
   # =========================================================================
   # Redis (Alpine) - Cache & Session Store
+  # CATATAN: `container_name` sengaja TIDAK dipakai. Nama container unik untuk
+  # seluruh Docker host, sehingga kalau dipakai lagi oleh aplikasi lain (Redis
+  # ini direncanakan dipakai bersama / sudah ada yang jalan), `docker compose up`
+  # gagal dengan "Conflict. The container name is already in use".
+  # Service tetap bisa diakses antar-container lewat nama service alias `redis`
+  # di laravel-network -> REDIS_HOST=redis.
   # =========================================================================
   redis:
     image: redis:alpine
-    container_name: attendapp-redis
     restart: unless-stopped
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:

@@ -241,6 +241,11 @@ nano .env
 #   REDIS_PORT=6379
 ```
 
+> ⚠️ **Catatan penting (dependency PHP 8.2):** `composer.lock` repo ini sudah
+> disesuaikan agar bisa dipasang di PHP 8.2 (image container memakai
+> `php:8.2-fpm-alpine`). Karena itu **selalu** pakai `composer install`
+> (bukan `composer update`) di server agar versi yang teruji ini yang dipakai.
+
 ### 7) Buat network bersama (WAJIB, sekali saja)
 
 Ketiga compose memakai network `external: true` bernama `shared-network`,
@@ -536,6 +541,10 @@ docker system df
 |--------|-------|--------|
 | `network shared-network not found` | network belum dibuat | `docker network create shared-network` lalu `docker compose up -d` ulang |
 | 502 Bad Gateway | `laravel-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
+| **`502` + log `==> vendor/ belum ada, menjalankan composer install...` berulang** | `composer install` gagal → entrypoint `exit 1` → Docker restart-loop → `app` tidak pernah listen di `:9000` → nginx balas 502 | cek pesan Composer di `docker compose logs app`; penyebab tersering `composer.lock` tidak kompatibel dengan PHP container (lihat baris berikut) |
+| **`nette/schema v1.2.2 requires php >=7.1 <8.2 -> your php version (8.2.35) does not satisfy that requirement`** | lock lama (dependensi transitif `league/config`) dibatasi PHP < 8.2, sedangkan image memakai PHP 8.2 | sudah diperbaiki: `nette/schema` dinaikkan ke v1.4.0 (`php 8.1 - 8.6`), `nette/utils` v4.0.11, `league/config` v1.2.0. Terapkan dengan `git pull` di repo aplikasi lalu `docker compose up -d --build app`. Bila memakai lock sendiri: `composer update nette/schema league/config --with-dependencies` |
+| **`fatal: detected dubious ownership in repository at '/var/www/html'`** | folder aplikasi di-bind-mount dan dimiliki user host, sedangkan proses container berjalan sebagai `root` | sudah diperbaiki: entrypoint menjalankan `git config --global --add safe.directory /var/www/html`. Manual: `docker compose exec app git config --global --add safe.directory /var/www/html` |
+| **`!! Redis belum siap setelah 30 detik` padahal Redis hidup** | pengecekan lama memakai `echo > /dev/tcp/...` yang merupakan fitur **bash**, sedangkan `/bin/sh` di Alpine = BusyBox ash | sudah diperbaiki: entrypoint memakai `php -r` + `fsockopen`. Pastikan juga `REDIS_HOST=redis` & `REDIS_PORT=6379` |
 | "Class not found" | `vendor/` belum ada | `docker compose exec app composer install --no-dev -o` |
 | **`mkdir ... Permission denied` + container restart terus** | UID container â‰  owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah â†’ Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../attendapp` (sibling repo), bukan `../attendapp` |
@@ -564,6 +573,14 @@ docker system df
   dioptimalkan untuk VPS Â±6 GB. Sesuaikan bila berbeda.
 - **HTTPS:** blok SSL di `reverse-proxy-docker/nginx/default.conf` masih dikomentari.
   Aktifkan setelah punya sertifikat (mis. Let's Encrypt/Certbot).
+- **Penting saat update kode aplikasi:** `git pull` di VPS tidak menghapus `vendor/`
+  yang isinya tidak lengkap/korup (vendor di-`.gitignore`). Bila `vendor/autoload.php`
+  ada padahal paketnya tidak lengkap, entrypoint menganggap instalasi sudah selesai.
+  Bersihkan sekali dengan:
+  ```bash
+  cd ~/projects/attendapp && rm -rf vendor
+  cd ~/projects/docker-ecosystem/app-laravel-docker && docker compose up -d --force-recreate app
+  ```
 
 
 
