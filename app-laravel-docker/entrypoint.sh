@@ -101,17 +101,28 @@ done
 echo "==> Menunggu Redis siap..."
 for i in $(seq 1 30); do
     if php -r '
-        $host = getenv("REDIS_HOST") ?: "redis";
+        $host = getenv("REDIS_HOST") ?: "redis-shared";
         $port = (int) (getenv("REDIS_PORT") ?: 6379);
+        $pass = getenv("REDIS_PASSWORD");
         $fp = @fsockopen($host, $port, $errno, $errstr, 1.0);
-        if ($fp) { fclose($fp); exit(0); }
-        exit(1);
+        if (!$fp) { exit(1); }
+        if ($pass && $pass !== "null") {
+            // Redis dengan requirepass membalas "-NOAUTH" bila belum login;
+            // itu artinya server HIDUP, jadi dianggap siap.
+            fwrite($fp, "AUTH " . $pass . "\r\n");
+            $line = (string) fgets($fp, 128);
+            fclose($fp);
+            exit(strpos($line, "+OK") === 0 ? 0 : 0);
+        }
+        fclose($fp);
+        exit(0);
     ' >/dev/null 2>&1; then
         echo "==> Redis siap."
         break
     fi
     if [ "$i" -eq 30 ]; then
-        echo "!! Redis belum siap setelah 30 detik, lanjutkan tetap saja."
+        echo "!! Redis (${REDIS_HOST:-redis-shared}:${REDIS_PORT:-6379}) belum siap setelah 30 detik, lanjutkan tetap saja."
+        echo "!! Pastikan compose redis-shared-docker sudah dijalankan lebih dulu."
     fi
     sleep 1
 done

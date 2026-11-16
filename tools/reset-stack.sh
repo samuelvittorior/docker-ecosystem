@@ -38,7 +38,7 @@ hr "1. Bersihkan container lama & sisa project sebelumnya"
 #   is already in use by container "abc123..."
 # Akibatnya service nginx tidak pernah jalan -> DNS "attendapp-nginx" tidak ada
 # -> reverse proxy balas 502 "could not be resolved".
-STALE="attendapp-app attendapp-nginx attendapp-redis laravel-app laravel-nginx laravel-redis laravel-test-app laravel-test-nginx laravel-test-redis"
+STALE="attendapp-app attendapp-nginx attendapp-redis redis-shared laravel-app laravel-nginx laravel-redis laravel-test-app laravel-test-nginx laravel-test-redis app-laravel-docker-redis-1"
 for c in $STALE; do
     if docker ps -a --format '{{.Names}}' | grep -qx "$c"; then
         echo "  - hapus container: $c"
@@ -51,8 +51,10 @@ hr "2. Recreate reverse proxy (memuat nginx/default.conf terbaru)"
 ( cd reverse-proxy-docker && docker compose up -d --force-recreate ) || exit 1
 docker exec "$PROXY_CONTAINER" nginx -t 2>&1 || true
 
-hr "3. Build & jalankan stack aplikasi"
-( cd app-laravel-docker && docker compose up -d --build --remove-orphans app redis laravel-nginx ) || exit 1
+hr "3. Build & jalankan stack aplikasi (app + nginx)"
+# Redis TIDAK lagi di compose ini -- jalankan redis-shared-docker lebih dulu.
+( cd redis-shared-docker && docker compose up -d ) || echo "  !! redis-shared-docker gagal dijalankan"
+( cd app-laravel-docker && docker compose up -d --build --remove-orphans app laravel-nginx ) || exit 1
 
 hr "4. Tunggu container aplikasi siap (maks 90 detik)"
 for i in $(seq 1 90); do
@@ -73,18 +75,31 @@ done
 hr "4b. Status ketiga container kunci"
 docker ps -a --format '{{.Names}}\t{{.Status}}' | grep -E 'attendapp|reverse-proxy|postgres' || echo "  (tidak ada)"
 
-hr "5. Anggota shared-network (harus ada attendapp-nginx)"
+hr "5. Anggota shared-network (harus ada attendapp-nginx & redis-shared)"
 docker network inspect shared-network --format '{{range .Containers}}{{.Name}}  {{.IPv4Address}}{{"\n"}}{{end}}' 2>/dev/null \
   || echo "  !! network shared-network tidak ada"
 
 hr "6. Tes DNS dari dalam reverse-proxy"
 docker exec "$PROXY_CONTAINER" getent hosts "$APP_NGINX" && echo "  OK: $APP_NGINX ter-resolve" \
   || echo "  !! GAGAL: $APP_NGINX tidak ter-resolve -> cek langkah 1 & 3"
+docker exec "$PROXY_CONTAINER" getent hosts redis-shared >/dev/null 2>&1 \
+  && echo "  OK: redis-shared ada di shared-network" \
+  || echo "  !! redis-shared belum terdaftar -> jangan lupa 'cd redis-shared-docker && docker compose up -d'"
 
 hr "7. Tes HTTP berlapis"
 docker exec "$PROXY_CONTAINER" wget -qS -O /dev/null "http://$APP_NGINX/" 2>&1 | head -6
 curl -s -o /dev/null -w "host -> :%{http_code}\n" "http://127.0.0.1:$LOCAL_PORT/" 2>&1 || true
 curl -s -o /dev/null -w "  redirect: %{redirect_url}\n" "http://127.0.0.1:$LOCAL_PORT/" 2>&1 || true
+
+hr "7b. Redis: cek auth dari container app"
+docker exec "$APP_FPM" sh -c 'php -r "
+\$h = getenv(\"REDIS_HOST\") ?: \"redis-shared\";
+\$p = (int) (getenv(\"REDIS_PORT\") ?: 6379);
+\$a = getenv(\"REDIS_PASSWORD\");
+\$r = new Redis();
+try { \$r->connect(\$h, \$p, 2.0); if (\$a && \$a !== \"null\") { \$r->auth(\$a); } echo \"  OK: REDIS_HOST=\$h:\$p auth=\" . (\$a && \$a!==\"null\" ? \"ya\" : \"tidak\") . \" ping=\" . \$r->ping() . PHP_EOL; }
+catch (Throwable \$e) { echo \"  !! GAGAL: \" . \$e->getMessage() . PHP_EOL; }
+"' 2>&1
 
 hr "8. Log singkat"
 docker compose -f reverse-proxy-docker/docker-compose.yml logs --tail=15 "$PROXY_CONTAINER" 2>&1

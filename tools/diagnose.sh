@@ -46,7 +46,8 @@ docker exec "$APP_NGINX" nginx -t 2>&1 || true
 
 hr "7. DNS: apa attendapp-nginx bisa di-resolve DARI reverse proxy?"
 docker exec "$PROXY_CONTAINER" getent hosts "$APP_NGINX" 2>&1 || echo "GAGAL resolve $APP_NGINX"
-docker exec "$PROXY_CONTAINER" getent hosts "$APP_FPM" 2>&1 || echo "GAGAL resolve $APP_FPM (normal: app hanya di laravel-network)"
+docker exec "$PROXY_CONTAINER" getent hosts "$APP_FPM" 2>&1 || echo "GAGAL resolve $APP_FPM"
+docker exec "$PROXY_CONTAINER" getent hosts redis-shared 2>&1 || echo "GAGAL resolve redis-shared"
 
 hr "8. HTTP test DARI reverse proxy -> nginx aplikasi"
 docker exec "$PROXY_CONTAINER" wget -qS -O /dev/null "http://$APP_NGINX/" 2>&1 | head -12 || echo "request gagal"

@@ -25,22 +25,24 @@ services:
       # docker-ecosystem), timpa lewat file `app-laravel-docker/.env`:
       #   LARAVEL_APP_PATH=../attendapp
       - ${LARAVEL_APP_PATH:-../../attendapp}:/var/www/html:delegated
-    depends_on:
-      - redis
-    # laravel-network : dipakai antar-service dalam stack ini (app <-> nginx <-> redis).
-    # shared-network  : dipakai reverse-proxy untuk mencapai PHP-FPM/nginx.
+    # CATATAN: tidak ada `depends_on: redis` lagi. Redis kini milik compose
+    # terpisah (redis-shared-docker). Urutan start yang benar:
+    #   db-postgres-docker -> redis-shared-docker -> app-laravel-docker
+    # Entrypoint sudah menunggu PostgreSQL & Redis siap sebelum migrate.
+    # shared-network : SATU-SATUNYA network. Dipakai untuk semua komunikasi:
+    #   reverse-proxy -> laravel-nginx  (proxy_pass attendapp-nginx:80)
+    #   laravel-nginx -> app            (fastcgi_pass app:9000)
+    #   app           -> redis-shared   (REDIS_HOST=redis-shared)
+    #   app           -> postgres-db    (DB_HOST=postgres-db)
+    # Network terpisah seperti `laravel-network` TIDAK dipakai lagi supaya
+    # konsisten dengan pola "semua compose memakai shared-network".
     #
     # ALIAS NETWORK (penting):
-    # `aliases` mendaftarkan nama TAMBAHAN di DNS Docker. REVERSE PROXY hanya
-    # mengetahui alias/nama yang terdaftar di shared-network. Karena itu service
-    # PHP-FPM ini WAJIB punya alias `app`, sebab config nginx aplikasi memakai
-    # `fastcgi_pass app:9000`.
-    #
-    # `container_name` TIDAK dipakai sebagai nama DNS, jadi jangan
-    # mengandalkannya. Alias membuat penamaan tetap stabil walau service ini
-    # nanti diganti nama.
+    # `aliases` mendaftarkan nama TAMBAHAN di DNS Docker. Nama yang bisa
+    # di-resolve antar container hanyalah nama service Compose atau `aliases`,
+    # BUKAN `container_name`. Service PHP-FPM ini WAJIB punya alias `app`,
+    # sebab nginx aplikasi memakai `fastcgi_pass app:9000`.
     networks:
-      laravel-network:
       shared-network:
         aliases:
           - app
@@ -59,8 +61,7 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app
-    # laravel-network : nginx -> app:9000 (FastCGI).
-    # shared-network  : tempat reverse-proxy mencapai service ini.
+    # shared-network : tempat reverse-proxy mencapai service ini.
     #
     # WAJIB pakai alias `attendapp-nginx` (target `proxy_pass` di
     # reverse-proxy-docker/nginx/default.conf) DAN `laravel-nginx` (nama service
@@ -68,37 +69,31 @@ services:
     # Tanpa alias `attendapp-nginx`, reverse proxy gagal dengan:
     #   attendapp-nginx could not be resolved (3: Host not found)
     networks:
-      laravel-network:
       shared-network:
         aliases:
           - attendapp-nginx
           - laravel-nginx
 
   # =========================================================================
-  # Redis (Alpine) - Cache & Session Store
-  # CATATAN: `container_name` sengaja TIDAK dipakai. Nama container unik untuk
-  # seluruh Docker host, sehingga kalau dipakai lagi oleh aplikasi lain (Redis
-  # ini direncanakan dipakai bersama / sudah ada yang jalan), `docker compose up`
-  # gagal dengan "Conflict. The container name is already in use".
-  # Service tetap bisa diakses antar-container lewat nama service alias `redis`
-  # di laravel-network -> REDIS_HOST=redis.
+  # CATATAN PENTING: service `redis` LOKAL DIHAPUS dari compose ini.
+  #
+  # Redis sekarang berdiri sendiri di `redis-shared-docker/` (pola sama seperti
+  # `db-postgres-docker`) dan dipakai bersama beberapa aplikasi lewat
+  # `shared-network` dengan nama `redis-shared`.
+  #
+  # Jalankan Redis-nya lebih dulu:
+  #   cd ../redis-shared-docker && docker compose up -d
+  #
+  # Lalu di .env.docker aplikasi ini:
+  #   REDIS_HOST=redis-shared
+  #   REDIS_PASSWORD=<sama dengan redis-shared-docker/.env.docker>
+  #   REDIS_DB / REDIS_CACHE_DB = nomor unik aplikasi ini
+  #     (lihat tabel alokasi di redis-shared-docker/README.md)
   # =========================================================================
-  redis:
-    image: redis:alpine
-    restart: unless-stopped
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    volumes:
-      - redis-data:/data
-    networks:
-      - laravel-network
 
+# Semua service memakai SATU network bersama `shared-network` (external).
+# Dibuat sekali saja:  docker network create shared-network
 networks:
-  laravel-network:
-    driver: bridge
   shared-network:
     external: true
     name: shared-network
-
-volumes:
-  redis-data:
-    driver: local

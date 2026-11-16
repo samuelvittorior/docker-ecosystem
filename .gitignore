@@ -1,7 +1,7 @@
 # =============================================================================
 # .gitignore untuk docker-ecosystem
 # Tujuan: HANYA menyimpan file konfigurasi Docker/Infra.
-# Kode aplikasi Laravel (folder laravel-test/) dikelola di repo terpisah,
+# Kode aplikasi Laravel (folder attendapp/) dikelola di repo terpisah,
 # jadi di-exclude dari repo ini.
 # =============================================================================
 

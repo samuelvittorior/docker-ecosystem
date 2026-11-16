@@ -13,42 +13,56 @@ ke banyak aplikasi Laravel.
 ## ðŸ—ï¸ Arsitektur
 
 ```
-                        Internet
-                            â”‚
-                            â–¼
-              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-              â”‚  reverse-proxy (nginx:alpine)â”‚  port 80 / 443
-              â”‚  app.attendapp.com        â”‚
-              â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                             â”‚ proxy_pass (HTTP) via shared-network
-                             â–¼
-              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-              â”‚ laravel-nginx (nginx:alpine)â”‚  listen 80
-              â”‚ root: /var/www/html/public  â”‚
-              â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                             â”‚ fastcgi_pass app:9000
-                             â–¼
-              â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-              â”‚ app (php:8.2-fpm)          â”‚
-              â”‚  /var/www/html â† $LARAVEL_APP_PATH
-              â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
-                      â”‚              â”‚
-        shared-networkâ”‚              â”‚laravel-network
-                      â–¼              â–¼
-        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-        â”‚ postgres-db       â”‚  â”‚ redis        â”‚
-        â”‚ postgres:15-alpineâ”‚  â”‚ redis:alpine â”‚
-        â”‚ (port TIDAK dibuka)â”‚ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                            Internet
+                                |
+                                v
+              +----------------------------------+
+              |  reverse-proxy (nginx:alpine)    |  port 80 / 443 / 8101
+              |  app.attendapp.com               |
+              +----------------+-----------------+
+                               |  proxy_pass attendapp-nginx:80
+                               v
+              +----------------------------------+
+              | attendapp-nginx (nginx:alpine)   |  listen 80
+              | root: /var/www/html/public       |
+              +----------------+-----------------+
+                               |  fastcgi_pass app:9000
+                               v
+              +----------------------------------+
+              | attendapp-app (php:8.2-fpm)      |
+              | /var/www/html <- $LARAVEL_APP_PATH|
+              +----+------------------------+----+
+                   |                        |
+                   | DB_HOST=postgres-db    | REDIS_HOST=redis-shared
+                   v                        v
+        +--------------------+   +--------------------+
+        | postgres-db        |   | redis-shared       |
+        | postgres:15-alpine |   | redis:alpine       |
+        | (port tidak dibuka)|   | (port tidak dibuka)|
+        +--------------------+   +--------------------+
+
+        SEMUA container di atas berada di SATU network: shared-network
 ```
+
+**Redis bersama:** Redis tidak lagi di dalam `app-laravel-docker`, melainkan
+berdiri sendiri di `redis-shared-docker/` dan dipakai bersama beberapa aplikasi
+lewat `shared-network` dengan nama `redis-shared`.
+
+> **CATATAN Penting - Beda dengan PostgreSQL:** Redis **tidak** punya isolasi per-user seperti
+> PostgreSQL. Setiap aplikasi **wajib** memakai nomor `REDIS_DB` /
+> `REDIS_CACHE_DB` yang berbeda, kalau tidak `php artisan cache:clear` di satu
+> aplikasi bisa menghapus cache aplikasi lain. Tabel alokasi nomor DB ada di
+> [redis-shared-docker/README.md](redis-shared-docker/README.md).
 
 **Peran tiap folder:**
 
 | Folder | Isi | Port |
 |--------|-----|------|
-| `app-laravel-docker/` | PHP-FPM (Laravel) + Nginx internal + Redis | internal (9000, 80) |
+| `app-laravel-docker/` | PHP-FPM (Laravel) + Nginx internal | internal (9000, 80) |
+| `redis-shared-docker/` | Redis BERSAMA untuk cache + session beberapa aplikasi | tidak diekspos |
 | `db-postgres-docker/` | PostgreSQL 15 (dibuat pertama, membuat `shared-network`) | tidak diekspos |
 | `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443, **8101** (akses langsung tanpa domain) |
+| `tools/` | Skrip bantu operasional (`diagnose.sh`, `reset-stack.sh`) | - |
 
 ---
 
@@ -197,6 +211,7 @@ File `.env.docker` sudah ikut ter-commit. **Wajib ganti password default!**
 cd ~/projects/docker-ecosystem
 
 nano db-postgres-docker/.env.docker
+nano redis-shared-docker/.env.docker
 nano app-laravel-docker/.env.docker
 nano reverse-proxy-docker/.env.docker
 ```
@@ -205,6 +220,10 @@ nano reverse-proxy-docker/.env.docker
 |------|----------|------------|
 | `db-postgres-docker/.env.docker` | `POSTGRES_PASSWORD` | ganti dari `postgres` |
 | `app-laravel-docker/.env.docker` | `DB_PASSWORD` | **harus sama** dengan di atas |
+| `redis-shared-docker/.env.docker` | `REDIS_PASSWORD` | ganti dari default |
+| `app-laravel-docker/.env.docker` | `REDIS_PASSWORD` | **harus sama** dengan di atas |
+| `app-laravel-docker/.env.docker` | `REDIS_HOST` | `redis-shared` (jangan diubah) |
+| `app-laravel-docker/.env.docker` | `REDIS_DB` / `REDIS_CACHE_DB` | nomor unik per aplikasi (lihat `redis-shared-docker/README.md`) |
 | `app-laravel-docker/.env.docker` | `APP_URL` | sesuaikan domain Anda |
 | `app-laravel-docker/.env.docker` | `APP_KEY` | **ganti & rahasiakan** (`php artisan key:generate --show`) |
 | `app-laravel-docker/.env.docker` | `FPM_USER` / `FPM_GROUP` | biarkan `www-data` (user worker PHP-FPM) |
@@ -237,7 +256,8 @@ nano .env
 #   CACHE_DRIVER=redis
 #   SESSION_DRIVER=redis
 #   REDIS_CLIENT=phpredis
-#   REDIS_HOST=redis
+#   REDIS_HOST=redis-shared
+#   REDIS_PASSWORD=<sama dengan redis-shared-docker/.env.docker>
 #   REDIS_PORT=6379
 ```
 
@@ -262,8 +282,9 @@ docker network ls | grep shared-network
 cd ~/projects/docker-ecosystem
 
 cd db-postgres-docker && docker compose up -d && cd ..        # 8.1 database dulu
-cd reverse-proxy-docker && docker compose up -d && cd ..     # 8.2 reverse proxy
-cd app-laravel-docker && docker compose up -d --build && cd ..  # 8.3 aplikasi
+cd redis-shared-docker && docker compose up -d && cd ..      # 8.2 redis bersama
+cd reverse-proxy-docker && docker compose up -d && cd ..     # 8.3 reverse proxy
+cd app-laravel-docker && docker compose up -d --build && cd ..  # 8.4 aplikasi
 ```
 
 Cek status & log:
@@ -565,11 +586,15 @@ bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
 | Gejala | Sebab | Solusi |
 |--------|-------|--------|
 | `network shared-network not found` | network belum dibuat | `docker network create shared-network` lalu `docker compose up -d` ulang |
-| 502 Bad Gateway | `laravel-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
+| 502 Bad Gateway | `attendapp-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
 | **`502` + log `==> vendor/ belum ada, menjalankan composer install...` berulang** | `composer install` gagal → entrypoint `exit 1` → Docker restart-loop → `app` tidak pernah listen di `:9000` → nginx balas 502 | cek pesan Composer di `docker compose logs app`; penyebab tersering `composer.lock` tidak kompatibel dengan PHP container (lihat baris berikut) |
 | **`nette/schema v1.2.2 requires php >=7.1 <8.2 -> your php version (8.2.35) does not satisfy that requirement`** | lock lama (dependensi transitif `league/config`) dibatasi PHP < 8.2, sedangkan image memakai PHP 8.2 | sudah diperbaiki: `nette/schema` dinaikkan ke v1.4.0 (`php 8.1 - 8.6`), `nette/utils` v4.0.11, `league/config` v1.2.0. Terapkan dengan `git pull` di repo aplikasi lalu `docker compose up -d --build app`. Bila memakai lock sendiri: `composer update nette/schema league/config --with-dependencies` |
 | **`fatal: detected dubious ownership in repository at '/var/www/html'`** | folder aplikasi di-bind-mount dan dimiliki user host, sedangkan proses container berjalan sebagai `root` | sudah diperbaiki: entrypoint menjalankan `git config --global --add safe.directory /var/www/html`. Manual: `docker compose exec app git config --global --add safe.directory /var/www/html` |
-| **`!! Redis belum siap setelah 30 detik` padahal Redis hidup** | pengecekan lama memakai `echo > /dev/tcp/...` yang merupakan fitur **bash**, sedangkan `/bin/sh` di Alpine = BusyBox ash | sudah diperbaiki: entrypoint memakai `php -r` + `fsockopen`. Pastikan juga `REDIS_HOST=redis` & `REDIS_PORT=6379` |
+| **`!! Redis belum siap setelah 30 detik` padahal Redis hidup** | pengecekan lama memakai `echo > /dev/tcp/...` yang merupakan fitur **bash**, sedangkan `/bin/sh` di Alpine = BusyBox ash | sudah diperbaiki: entrypoint memakai `php -r` + `fsockopen`. Pastikan juga `REDIS_HOST=redis-shared` & `REDIS_PORT=6379` |
+| **`NOAUTH Authentication required`** | `REDIS_PASSWORD` aplikasi beda/kosong, sedangkan Redis bersama memakai `requirepass` | samakan `REDIS_PASSWORD` di `app-laravel-docker/.env.docker` dengan `redis-shared-docker/.env.docker`, lalu `docker compose up -d --force-recreate app` |
+| **`Could not connect to Redis at redis-shared:6379`** | container `redis-shared` belum jalan, atau service app tidak ikut `shared-network` | `cd redis-shared-docker && docker compose up -d`; cek `docker network inspect shared-network` (harus memuat `redis-shared` dan `attendapp-app`) |
+| **Cache aplikasi lain hilang setelah `cache:clear`** | nomor `REDIS_DB` / `REDIS_CACHE_DB` bertabrakan antar aplikasi | beri nomor unik per aplikasi (tabel alokasi di `redis-shared-docker/README.md`) |
+| **`OOM command not allowed when used memory > maxmemory`** | policy `noeviction` + memori Redis penuh | naikkan `REDIS_MAXMEMORY` di `redis-shared-docker/.env.docker`, lalu `docker compose up -d --force-recreate redis` |
 | "Class not found" | `vendor/` belum ada | `docker compose exec app composer install --no-dev -o` |
 | **`mkdir ... Permission denied` + container restart terus** | UID container â‰  owner folder di host | perbaiki file compose/entrypoint terbaru (container jalan sebagai root + `chown www-data`), lalu `docker compose up -d --build app`. Sementara: `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah â†’ Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../attendapp` (sibling repo), bukan `../attendapp` |

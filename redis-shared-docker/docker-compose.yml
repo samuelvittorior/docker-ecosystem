@@ -1,0 +1,69 @@
+services:
+  # =========================================================================
+  # Redis - Cache & Session Store BERSAMA untuk banyak aplikasi
+  #
+  # Pola sama seperti `db-postgres-docker`: service ini berdiri sendiri,
+  # memakai `shared-network`, dan aplikasi lain cukup menambahkan dirinya ke
+  # `shared-network` untuk bisa memakai Redis ini.
+  #
+  # PENTING (beda dengan PostgreSQL):
+  #   Redis TIDAK punya isolasi per-user/per-database seperti PostgreSQL.
+  #   "Database" di Redis hanya nomor 0-15 dalam SATU keyspace, tanpa hak akses
+  #   per nomor. Karena itu, agar aman dipakai bersama, setiap aplikasi WAJIB
+  #   memakai nomor DB yang berbeda (lihat tabel alokasi di README) DAN sebuah
+  #   REDIS_PREFIX unik. Tanpa itu, `php artisan cache:clear` di satu aplikasi
+  #   dapat menghapus cache aplikasi lain yang memakai nomor DB sama.
+  # =========================================================================
+  redis:
+    image: redis:alpine
+    # container_name dipakai agar mudah dioperasikan (docker exec/redis-cli).
+    # Nama DNS yang dipakai aplikasi adalah ALIAS `redis-shared` di bawah.
+    container_name: redis-shared
+    restart: unless-stopped
+
+    # Password diambil dari .env.docker (jangan ditulis di sini).
+    # `$$` di-escape agar Compose menyerahkannya ke shell container, bukan
+    # menginterpolasinya saat parsing compose.
+    env_file:
+      - .env.docker
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server /usr/local/etc/redis/redis.conf
+        --requirepass "$$REDIS_PASSWORD"
+
+    volumes:
+      - redis-data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+
+    # Tanpa healthcheck, container app bisa mencoba connect sebelum Redis siap.
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+    networks:
+      shared-network:
+        # Nama yang HARUS dipakai aplikasi: REDIS_HOST=redis-shared
+        aliases:
+          - redis-shared
+
+    # Port TIDAK dibuka ke host/internet. Akses dari luar (mis. RedisInsight
+    # di komputer Anda) lewat SSH tunnel:
+    #   ssh -N -L 6379:127.0.0.1:6379 user@IP_VPS
+    # lalu buka tunnel ke 127.0.0.1:6379. Bila ingin bind ke loopback host,
+    # aktifkan baris ports di bawah (hanya 127.0.0.1, tetap tidak publik):
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+
+networks:
+  shared-network:
+    external: true
+    name: shared-network
+
+volumes:
+  redis-data:
+    driver: local
