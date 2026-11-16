@@ -48,7 +48,7 @@ ke banyak aplikasi Laravel.
 |--------|-----|------|
 | `app-laravel-docker/` | PHP-FPM (Laravel) + Nginx internal + Redis | internal (9000, 80) |
 | `db-postgres-docker/` | PostgreSQL 15 (dibuat pertama, membuat `shared-network`) | tidak diekspos |
-| `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443 |
+| `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443, **8101** (akses langsung tanpa domain) |
 
 ---
 
@@ -314,6 +314,27 @@ curl -H "Host: app.attendapp.com" http://localhost/photos
 Belum punya domain? Tidak masalah. Karena blok Laravel di `reverse-proxy-docker/nginx/default.conf`
 diberi `default_server`, request yang datang lewat **IP publik** langsung diteruskan ke aplikasi.
 
+**Cara 0 â€” paling cepat: port khusus tanpa domain (`:8101`)**
+
+Reverse proxy sudah memetakan port host **8101** ke port 8080 container, dan
+blok `listen 8080` di `reverse-proxy-docker/nginx/default.conf` meneruskan ke
+`attendapp-nginx`. Jadi cukup:
+
+```
+http://IP_VPS:8101/
+```
+
+Blok ini memakai `proxy_set_header Host $http_host` (menyertakan port) supaya
+URL yang di-generate Laravel (redirect, form action, aset) tetap memakai
+`:8101` dan tidak "nyasar" ke port 80.
+
+> Port host bisa diubah lewat variabel `APP_HTTP_PORT`. Karena Compose hanya
+> membaca file `.env` untuk interpolasi (bukan `.env.docker`), caranya:
+> `APP_HTTP_PORT=8101 docker compose up -d --force-recreate reverse-proxy`
+> atau `docker compose --env-file .env.docker up -d --force-recreate reverse-proxy`.
+> Jangan lupa buka port tersebut di firewall VPS:
+> `sudo ufw allow 8101/tcp` (atau Security Group di cloud provider).
+
 **Cara 1 â€” langsung lewat IP publik**
 
 ```bash
@@ -520,6 +541,8 @@ docker system df
 | **`Composer could not find a composer.json file` / `/var/www/html` kosong** | path volume salah â†’ Docker membuat folder kosong | cek `LARAVEL_APP_PATH`; default harus `../../attendapp` (sibling repo), bukan `../attendapp` |
 | **`No application encryption key has been specified`** | `APP_KEY` belum di-set | isi `APP_KEY` di `app-laravel-docker/.env.docker`, lalu recreate container |
 | **`http://IP_VPS/` menampilkan "Reverse Proxy is running..."** | blok catch-all masih `default_server` | beri `default_server` ke blok Laravel di `reverse-proxy-docker/nginx/default.conf`, lalu `docker compose up -d --force-recreate reverse-proxy` |
+| **`nginx: [emerg] host not found in upstream "attendapp-nginx"` + reverse proxy restart terus** | nginx me-resolve nama upstream **saat start**; container `attendapp-nginx` belum/tidak berjalan | sudah diperbaiki: `default.conf` memakai `resolver 127.0.0.11` + `proxy_pass` variabel (`$attendapp_upstream`) sehingga DNS baru di-resolve saat request. Terapkan dengan `docker compose up -d --force-recreate reverse-proxy` |
+| **`http://IP_VPS:8101` tidak bisa dibuka / connection refused** | port belum dipetakan, firewall menutup, atau container lama belum di-recreate | pastikan `ports:` berisi `"${APP_HTTP_PORT:-8101}:8080"`, lalu `docker compose up -d --force-recreate reverse-proxy`; buka firewall `sudo ufw allow 8101/tcp`; cek `ss -tlnp \| grep 8101` |
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
 | **pgAdmin: `connection to server at "127.0.0.1", port ... failed: server closed the connection unexpectedly`** | (a) SSH Tunnel tidak dicentang, atau (b) port 5432 belum di-bind ke `127.0.0.1` di VPS | centang *Use SSH tunneling* + isi Tunnel host = IP VPS; lalu di VPS `docker compose up -d --force-recreate postgres` dan cek `ss -tlnp \| grep 5432` |

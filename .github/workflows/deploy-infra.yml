@@ -33,6 +33,24 @@ jobs:
           done
           echo "Semua konfigurasi compose valid."
 
+      - name: Uji sintaks Nginx (config diuji SEBELUM deploy)
+        run: |
+          set -e
+          # --add-host: beri IP dummy agar nama upstream statis (fastcgi_pass app:9000)
+          # bisa di-resolve saat `nginx -t`. Tanpa ini nginx -t gagal dengan
+          # "host not found in upstream" walau konfigurasinya benar.
+          echo "==> reverse-proxy-docker/nginx/default.conf"
+          docker run --rm \
+            --add-host attendapp-nginx:127.0.0.1 \
+            -v "$PWD/reverse-proxy-docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:alpine nginx -t
+
+          echo "==> app-laravel-docker/nginx/default.conf"
+          docker run --rm \
+            --add-host app:127.0.0.1 \
+            -v "$PWD/app-laravel-docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:alpine nginx -t
+
       - name: Cek file wajib
         run: |
           set -e
@@ -95,7 +113,10 @@ jobs:
             (cd db-postgres-docker && docker compose up -d)
 
             echo "==> 2/3 Menjalankan Reverse Proxy"
-            (cd reverse-proxy-docker && docker compose up -d)
+            # --force-recreate: nginx TIDAK memuat ulang file config yang
+            # di-bind-mount. Tanpa flag ini perubahan nginx/default.conf tidak
+            # pernah aktif walaupun file di VPS sudah ter-update oleh git pull.
+            (cd reverse-proxy-docker && docker compose up -d --force-recreate)
 
             echo "==> 3/3 Build & jalankan Laravel (app + nginx + redis)"
             cd app-laravel-docker

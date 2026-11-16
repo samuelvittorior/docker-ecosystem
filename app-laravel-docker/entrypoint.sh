@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-# Entrypoint Laravel (container laravel-app / PHP-FPM)
+# Entrypoint Laravel (container attendapp-app / PHP-FPM)
 # Menjalankan hal-hal rutin sebelum PHP-FPM dijalankan:
 #   1. Menyiapkan direktori storage & bootstrap/cache
 #   2. Memperbaiki permission storage & bootstrap/cache (pengganti chmod manual)
