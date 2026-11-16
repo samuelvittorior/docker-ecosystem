@@ -535,6 +535,31 @@ docker system df
 
 ---
 
+## 🛠 Tools Bantu (opsional)
+
+Dua skrip di `tools/` untuk mempermudah operasional di VPS:
+
+| Skrip | Fungsi |
+|---|---|
+| `tools/diagnose.sh` | **Read-only.** 16 pemeriksaan: status container, port, anggota `shared-network`, config nginx yang benar-benar dimuat (`nginx -T`), tes DNS & HTTP berlapis, cek PHP-FPM, tail log. Jalankan saat ada 502. |
+| `tools/reset-stack.sh` | Membersihkan container sisa bernama lama, recreate reverse proxy, build & jalankan stack aplikasi, lalu verifikasi DNS + HTTP. **Tidak** menghapus volume data. |
+
+```bash
+cd ~/projects/docker-ecosystem
+bash tools/diagnose.sh      # kalau ada masalah
+bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
+```
+
+> **Penting — nama service ≠ nama DNS.** Nama yang bisa di-resolve antar
+> container hanyalah **nama service Compose** atau **`aliases`** pada network,
+> **bukan** `container_name`. Itulah sebabnya
+> `app-laravel-docker/docker-compose.yml` mendaftarkan
+> `aliases: [attendapp-nginx, laravel-nginx]` (untuk nginx) dan
+> `aliases: [app, attendapp-app, app-fpm]` (untuk PHP-FPM).
+
+---
+
+
 ## ðŸ©º Troubleshooting
 
 | Gejala | Sebab | Solusi |
@@ -551,6 +576,7 @@ docker system df
 | **`No application encryption key has been specified`** | `APP_KEY` belum di-set | isi `APP_KEY` di `app-laravel-docker/.env.docker`, lalu recreate container |
 | **`http://IP_VPS/` menampilkan "Reverse Proxy is running..."** | blok catch-all masih `default_server` | beri `default_server` ke blok Laravel di `reverse-proxy-docker/nginx/default.conf`, lalu `docker compose up -d --force-recreate reverse-proxy` |
 | **`nginx: [emerg] host not found in upstream "attendapp-nginx"` + reverse proxy restart terus** | nginx me-resolve nama upstream **saat start**; container `attendapp-nginx` belum/tidak berjalan | sudah diperbaiki: `default.conf` memakai `resolver 127.0.0.11` + `proxy_pass` variabel (`$attendapp_upstream`) sehingga DNS baru di-resolve saat request. Terapkan dengan `docker compose up -d --force-recreate reverse-proxy` |
+| **`attendapp-nginx could not be resolved (3: Host not found)` + 502** | (a) container `attendapp-nginx` tidak berjalan / tidak ikut `shared-network`, atau (b) sisa container bernama lama masih ada & stack belum di-recreate setelah service di-rename | jalankan `bash tools/reset-stack.sh` (membersihkan container lama + recreate berurutan + cek DNS). Pastikan `app-laravel-docker/docker-compose.yml` memuat `aliases: [attendapp-nginx]` pada `shared-network` |
 | **`http://IP_VPS:8101` tidak bisa dibuka / connection refused** | port belum dipetakan, firewall menutup, atau container lama belum di-recreate | pastikan `ports:` berisi `"${APP_HTTP_PORT:-8101}:8080"`, lalu `docker compose up -d --force-recreate reverse-proxy`; buka firewall `sudo ufw allow 8101/tcp`; cek `ss -tlnp \| grep 8101` |
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |

@@ -27,9 +27,25 @@ services:
       - ${LARAVEL_APP_PATH:-../../attendapp}:/var/www/html:delegated
     depends_on:
       - redis
+    # laravel-network : dipakai antar-service dalam stack ini (app <-> nginx <-> redis).
+    # shared-network  : dipakai reverse-proxy untuk mencapai PHP-FPM/nginx.
+    #
+    # ALIAS NETWORK (penting):
+    # `aliases` mendaftarkan nama TAMBAHAN di DNS Docker. REVERSE PROXY hanya
+    # mengetahui alias/nama yang terdaftar di shared-network. Karena itu service
+    # PHP-FPM ini WAJIB punya alias `app`, sebab config nginx aplikasi memakai
+    # `fastcgi_pass app:9000`.
+    #
+    # `container_name` TIDAK dipakai sebagai nama DNS, jadi jangan
+    # mengandalkannya. Alias membuat penamaan tetap stabil walau service ini
+    # nanti diganti nama.
     networks:
-      - laravel-network
-      - shared-network
+      laravel-network:
+      shared-network:
+        aliases:
+          - app
+          - attendapp-app
+          - app-fpm
 
   # =========================================================================
   # Nginx (Alpine) - Web server untuk Laravel (FastCGI ke PHP-FPM via 9000)
@@ -43,9 +59,20 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app
+    # laravel-network : nginx -> app:9000 (FastCGI).
+    # shared-network  : tempat reverse-proxy mencapai service ini.
+    #
+    # WAJIB pakai alias `attendapp-nginx` (target `proxy_pass` di
+    # reverse-proxy-docker/nginx/default.conf) DAN `laravel-nginx` (nama service
+    # Compose, agar konsisten dengan perintah `docker compose up ... laravel-nginx`).
+    # Tanpa alias `attendapp-nginx`, reverse proxy gagal dengan:
+    #   attendapp-nginx could not be resolved (3: Host not found)
     networks:
-      - laravel-network
-      - shared-network
+      laravel-network:
+      shared-network:
+        aliases:
+          - attendapp-nginx
+          - laravel-nginx
 
   # =========================================================================
   # Redis (Alpine) - Cache & Session Store
