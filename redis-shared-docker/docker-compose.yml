@@ -32,6 +32,7 @@ services:
       - >-
         exec redis-server /usr/local/etc/redis/redis.conf
         --requirepass "$$REDIS_PASSWORD"
+        --maxmemory "$${REDIS_MAXMEMORY:-384mb}"
 
     volumes:
       - redis-data:/data
