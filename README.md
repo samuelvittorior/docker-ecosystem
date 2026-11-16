@@ -372,22 +372,86 @@ sudo ufw status
 
 ---
 
-## 🔐 Akses Database lewat pgAdmin 4 (tanpa membuka port 5432)
+## 🔐 Akses Database lewat pgAdmin 4 (SSH Tunnel)
 
-**Cara A — SSH Tunnel dari dalam pgAdmin 4**
-1. Klik kanan *Servers* → **Register** → **Server…**
-2. Tab **General**: Name = `VPS Laravel`
-3. Tab **Connection**: Host = `localhost`, Port = `5432`,
-   Maintenance DB = `laravel-test`, Username = `postgres`, Password = password Anda
-4. Tab **SSH Tunnel**: centang *Use SSH tunneling* → Tunnel host = `IP_VPS`,
-   Port = `22`, Username = user VPS
-5. **Save** → pgAdmin membuat tunnel otomatis.
+Port 5432 **tidak terbuka ke internet**, tetapi di-bind ke `127.0.0.1` di VPS
+(lihat `db-postgres-docker/docker-compose.yml`) sehingga bisa dijangkau lewat SSH tunnel.
 
-**Cara B — tunnel manual via terminal**
-```bash
-ssh -L 5432:postgres-db:5432 user@IP_VPS -N
-# lalu di pgAdmin connect ke host: localhost, port: 5432
+### ⚠️ Sumber error "server closed the connection unexpectedly"
+
+pgAdmin membuat tunnel seperti ini:
+
 ```
+pgAdmin  →  sshd (VPS)  →  <Host>:<Port> yang Anda isi di tab Connection
+```
+
+Arti kolom di pgAdmin:
+
+| Kolom | Diisi apa | Catatan |
+|-------|-----------|---------|
+| **SSH Tunnel → Tunnel host** | `IP_VPS` | server SSH-nya |
+| **SSH Tunnel → Tunnel port** | `22` | port SSH |
+| **Connection → Host** | `127.0.0.1` | **alamat yang dilihat DARI DALAM VPS**, bukan dari laptop |
+| **Connection → Port** | `5432` | port PostgreSQL di dalam VPS |
+
+Kesalahan paling umum: mengisi **Connection → Host** dengan `127.0.0.1` **tanpa**
+mengaktifkan SSH tunnel. Akibatnya pgAdmin mencoba `127.0.0.1:5432` di **laptop Anda
+sendiri** (bukan VPS) → tidak ada PostgreSQL di sana → koneksi ditutup.
+
+Kesalahan kedua: mengisi **Connection → Host** dengan `postgres-db` atau
+`IP_VPS`. Nama container tidak bisa di-resolve oleh `sshd` di host, dan port
+5432 tidak terbuka ke publik — dua-duanya gagal.
+
+### Cara A — SSH Tunnel dari dalam pgAdmin 4
+
+1. Pastikan port sudah di-bind di VPS (sekali saja):
+   ```bash
+   cd ~/projects/docker-ecosystem/db-postgres-docker
+   docker compose up -d --force-recreate postgres
+   sudo ss -tlnp | grep 5432      # harus muncul 127.0.0.1:5432
+   ```
+2. Di pgAdmin: klik kanan *Servers* → **Register** → **Server…**
+3. Tab **General**: Name = `VPS Laravel`
+4. Tab **Connection**:
+   - Host = `127.0.0.1`
+   - Port = `5432`
+   - Maintenance database = `laravel-test`
+   - Username = `postgres`, Password = password DB Anda
+5. Tab **SSH Tunnel**: centang **Use SSH tunneling**
+   - Tunnel host = `IP_VPS`
+   - Tunnel port = `22`
+   - Username = user SSH VPS Anda
+   - Authentication = *Password* atau *Identity file* (private key)
+6. **Save** → pgAdmin membuat tunnel otomatis.
+
+### Cara B — tunnel manual via terminal (paling mudah didiagnosis)
+
+```bash
+ssh -N -L 5432:127.0.0.1:5432 user@IP_VPS
+```
+Biarkan terminal itu terbuka, lalu di pgAdmin **matikan** SSH Tunnel dan isi:
+Host = `127.0.0.1`, Port = `5432`.
+
+Jika cara ini berhasil tetapi Cara A gagal, berarti masalahnya di kredensial/key
+pada tab SSH Tunnel (bukan di PostgreSQL).
+
+### Verifikasi cepat di VPS
+
+```bash
+# 1) port benar-benar listen di loopback
+sudo ss -tlnp | grep 5432
+
+# 2) login langsung dari dalam VPS
+docker compose -f ~/projects/docker-ecosystem/db-postgres-docker/docker-compose.yml \
+  exec postgres psql -U postgres -d laravel-test -c '\dt'
+
+# 3) cek log container bila koneksi ditolak
+docker logs --tail=50 postgres-db
+```
+
+> ❗ Jangan pernah memakai `ports: "5432:5432"` (tanpa `127.0.0.1:`). Itu membuka
+> database ke seluruh internet. Binding loopback + SSH tunnel sudah cukup aman.
+
 
 ---
 
@@ -458,6 +522,8 @@ docker system df
 | **`http://IP_VPS/` menampilkan "Reverse Proxy is running..."** | blok catch-all masih `default_server` | beri `default_server` ke blok Laravel di `reverse-proxy-docker/nginx/default.conf`, lalu `docker compose up -d --force-recreate reverse-proxy` |
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
+| **pgAdmin: `connection to server at "127.0.0.1", port ... failed: server closed the connection unexpectedly`** | (a) SSH Tunnel tidak dicentang, atau (b) port 5432 belum di-bind ke `127.0.0.1` di VPS | centang *Use SSH tunneling* + isi Tunnel host = IP VPS; lalu di VPS `docker compose up -d --force-recreate postgres` dan cek `ss -tlnp \| grep 5432` |
+| **pgAdmin: `could not translate host name "postgres-db"`** | Connection → Host diisi nama container, padahal tunnel keluar di host VPS | ganti Connection → Host menjadi `127.0.0.1` |
 | Unggah foto gagal (permission) | owner `storage` tidak sesuai | `sudo chown -R www-data:www-data storage bootstrap/cache` |
 | `route:cache` gagal | route berbasis Closure | pakai `Route::view('/', 'welcome')` |
 | DB connection refused | app & db beda network, DB belum siap | pastikan keduanya di `shared-network`, cek log `postgres-db` |
@@ -469,6 +535,8 @@ docker system df
 
 - **Keamanan:** `.env.docker` ikut ter-commit dan berisi kredensial — **ganti password**
   sebelum online. Jika repo publik, pertimbangkan memakai `.env.docker.example`.
+- **PostgreSQL** di-bind ke `127.0.0.1:5432` (loopback saja). Jangan diganti menjadi
+  `5432:5432` karena itu membuka database ke internet. Akses dari luar memakai SSH tunnel.
 - **Kustomisasi RAM:** nilai di `db-postgres-docker/postgres/conf.d/shared-buffer.sql`
   dioptimalkan untuk VPS ±6 GB. Sesuaikan bila berbeda.
 - **HTTPS:** blok SSL di `reverse-proxy-docker/nginx/default.conf` masih dikomentari.

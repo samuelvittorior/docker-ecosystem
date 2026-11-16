@@ -11,8 +11,19 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/conf.d:/docker-entrypoint-initdb.d/:ro
-    # Port 5432 sengaja TIDAK diexpose ke host untuk keamanan.
-    # Database hanya dapat diakses oleh container lain via shared-network.
+    # Port 5432 TIDAK dibuka ke publik (0.0.0.0), tetapi di-bind ke LOOPBACK
+    # (127.0.0.1) agar hanya bisa dijangkau dari DALAM VPS itu sendiri.
+    #
+    # Ini WAJIB untuk SSH tunnel pgAdmin 4: pgAdmin -> sshd (VPS)
+    # -> 127.0.0.1:5432 -> container postgres-db. Tanpa binding ini,
+    # sshd tidak menemukan apa pun di 127.0.0.1:5432 sehingga tunnel
+    # langsung tertutup ("server closed the connection unexpectedly").
+    #
+    # Karena hanya 127.0.0.1, port ini TIDAK terjangkau dari internet.
+    # Bila port 5432 di host sudah dipakai PostgreSQL lain, ubah sisi kiri
+    # saja, mis. "127.0.0.1:5433:5432" (lalu sesuaikan saat membuat tunnel).
+    ports:
+      - "127.0.0.1:5432:5432"
     networks:
       - postgres-network
       - shared-network
