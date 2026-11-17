@@ -774,6 +774,46 @@ halaman https tetap menghasilkan URL `http://` (CSS/JS diblokir browser
 sebagai mixed content). Bila Anda memakai repo aplikasi versi lama, pastikan
 perubahan ini sudah ikut (`git pull`).
 
+**Penting: `TrustProxies` saja tidak cukup.** Header `X-Forwarded-Proto` harus
+benar-benar **sampai ke PHP**. Rantai request-nya dua lapis:
+
+```
+browser --https--> reverse-proxy --http--> attendapp-nginx --FastCGI--> PHP-FPM
+        (X-Forwarded-Proto: https)      ^
+                                        batas ini yang sering bocor
+```
+
+nginx di container `attendapp-nginx` menerima koneksi **http** dari reverse
+proxy, jadi `$https` kosong dan `fastcgi_params` bawaan mengirim
+`REQUEST_SCHEME=http` tanpa `HTTPS`. Akibatnya Laravel melihat request sebagai
+http dan `asset()`/`url()` menghasilkan `http://...` — persis gejala
+*"Mixed Content: ... requested an insecure script"*.
+
+Karena itu `app-laravel-docker/nginx/default.conf` meneruskan skema asli:
+
+```nginx
+map $http_x_forwarded_proto $fastcgi_https  { default off;  ~*^https on; }
+map $http_x_forwarded_proto $fastcgi_scheme { default http; ~*^https https; }
+
+location ~ \.php$ {
+    include fastcgi_params;                      # bawaan (nilainya ditimpa di bawah)
+    fastcgi_param HTTPS                  $fastcgi_https;
+    fastcgi_param REQUEST_SCHEME         $fastcgi_scheme;
+    fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto if_not_empty;
+    fastcgi_param HTTP_X_FORWARDED_HOST  $http_host if_not_empty;
+    fastcgi_param HTTP_HOST              $http_host;
+}
+```
+
+Karena memakai nilai `X-Forwarded-Proto` (bukan `HTTPS on` hardcode), jalur
+`http://IP:8101` tetap http — bukan dipaksa https.
+
+Cara cepat memastikan sudah benar:
+
+```bash
+curl -s https://attd.kovcc.web.id/login | grep -c 'http://attd.kovcc.web.id'   # harus 0
+```
+
 ### 5) Verifikasi hasil
 
 ```bash
@@ -973,7 +1013,7 @@ ketergantungan ke pihak ketiga).
 | `certbot: Challenge failed ... Invalid response` | port 80 tertutup di tengah jalan, atau ada proxy/CDN di depan | pastikan tidak ada Cloudflare *proxy* (awan oranye) saat penerbitan awal; gunakan DNS-only dulu |
 | `nginx: [warn] conflicting server name "attd.kovcc.web.id"` | nama domain didaftarkan juga di `default.conf` | hapus dari `server_name` di `default.conf`; cukup `_` (default_server) |
 | `nginx: [emerg] cannot load certificate` | file `.crt`/`.key` tidak ada di `nginx/certs/` | jalankan `sudo bash tools/enable-https.sh ...`; atau hapus `nginx/extra/<domain>.conf` lalu recreate |
-| Halaman https tampil **tanpa CSS/JS** (Console: *mixed content*) | `X-Forwarded-Proto` tidak dipercaya | pastikan `TrustProxies::$proxies = '*'` di repo aplikasi + `config:cache` ulang |
+| Halaman https tampil **tanpa CSS/JS** (Console: *mixed content*) | `X-Forwarded-Proto` tidak dipercaya **atau** tidak diteruskan ke PHP | 2 hal: (1) `TrustProxies::$proxies = '*'` di repo aplikasi; (2) `fastcgi_param HTTPS`/`HTTP_X_FORWARDED_PROTO` ada di `app-laravel-docker/nginx/default.conf` lalu `docker exec attendapp-nginx nginx -s reload`. Cek hasil: `curl -s https://<domain>/login \| grep -c http://<domain>` harus **0** |
 | `http://IP:8101` error setelah pasang SSL | `APP_FORCE_HTTPS=true` | ubah ke `false`, lalu `docker compose up -d --force-recreate app` |
 | Browser menolak http:// setelah pernah https | HSTS (1 tahun) | memang disengaja; gunakan https, atau hapus header HSTS di template lalu tunggu cache browser |
 | Renewal gagal tiap hari di log | cron jalan sebelum proxy hidup, atau cert lama masih mode standalone | jalankan `sudo bash tools/renew-https.sh` manual; pastikan proxy `restart: unless-stopped` |
