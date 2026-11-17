@@ -1,4 +1,4 @@
-# ðŸ³ Docker Ecosystem â€” Laravel + PostgreSQL + Redis + Nginx Reverse Proxy
+# 🐳 Docker Ecosystem — Laravel + PostgreSQL + Redis + Nginx Reverse Proxy
 
 Kumpulan **Docker Compose** yang terpisah namun saling terhubung lewat satu network
 bersama (`shared-network`), dirancang untuk VPS kecil (RAM Â±6 GB) dan mudah di-scale
@@ -10,7 +10,7 @@ ke banyak aplikasi Laravel.
 
 ---
 
-## ðŸ—ï¸ Arsitektur
+## 🏗️ Arsitektur
 
 ```
                             Internet
@@ -66,24 +66,24 @@ lewat `shared-network` dengan nama `redis-shared`.
 
 ---
 
-## ðŸ“ Struktur Direktori yang Diharapkan di VPS
+## 📁 Struktur Direktori yang Diharapkan di VPS
 
 Kedua repo harus berada pada **folder induk yang sama** karena volume memakai
 path relatif `${LARAVEL_APP_PATH:-../../attendapp}` (dihitung dari folder
 `app-laravel-docker/`):
 
 ```
-~/projects/
-â”œâ”€â”€ docker-ecosystem/          â† repo ini
-â”‚   â”œâ”€â”€ app-laravel-docker/
-â”‚   â”œâ”€â”€ db-postgres-docker/
-â”‚   â””â”€â”€ reverse-proxy-docker/
-â””â”€â”€ attendapp/              â† repo aplikasi Laravel
-    â”œâ”€â”€ app/  routes/  public/ ...
-    â””â”€â”€ vendor/
+home/user/projects/
+├── docker-ecosystem/          ← repo ini
+│   ├── app-laravel-docker/
+│   ├── db-postgres-docker/
+│   └── reverse-proxy-docker/
+└── laravel-test/              ← repo aplikasi Laravel
+    ├── app/  routes/  public/ ...
+    └── vendor/
 ```
 
-> âš ï¸ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
+> ⚠️ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
 > container akan gagal dengan `Composer could not find a composer.json file`.
 >
 > Bila Anda memakai struktur lain (mis. `attendapp/` di **dalam**
@@ -97,7 +97,7 @@ path relatif `${LARAVEL_APP_PATH:-../../attendapp}` (dihitung dari folder
 
 ---
 
-## ðŸ–¥ï¸ Panduan Lengkap Setup VPS Debian 12
+## 🖥️ Panduan Lengkap Setup VPS Debian 12
 
 > Semua perintah dijalankan via SSH sebagai user dengan hak `sudo`.
 > Ganti `IP_VPS` dengan IP server Anda.
@@ -234,7 +234,7 @@ ls -l ~/projects/docker-ecosystem/../../attendapp/composer.json
 # harus ada file-nya. Jika "No such file", path volume Anda salah.
 ```
 
-> ðŸ”‘ **Soal permission:** container `app` dijalankan sebagai **root**, lalu
+> 🔑 **Soal permission:** container `laravel-app` dijalankan sebagai **root**, lalu
 > entrypoint otomatis `chown` folder `storage` & `bootstrap/cache` ke `www-data`
 > dan menurunkan privilege worker PHP-FPM ke `www-data`. Karena itu Anda **tidak
 > perlu** mencocokkan UID host dengan UID container.
@@ -427,37 +427,37 @@ sudo ufw status
 
 ---
 
-## ðŸ” Akses Database lewat pgAdmin 4 (SSH Tunnel)
+## 🔐 Akses Database lewat pgAdmin 4 (SSH Tunnel)
 
 Port 5432 **tidak terbuka ke internet**, tetapi di-bind ke `127.0.0.1` di VPS
 (lihat `db-postgres-docker/docker-compose.yml`) sehingga bisa dijangkau lewat SSH tunnel.
 
-### âš ï¸ Sumber error "server closed the connection unexpectedly"
+### ⚠️ Sumber error "server closed the connection unexpectedly"
 
 pgAdmin membuat tunnel seperti ini:
 
 ```
-pgAdmin  â†’  sshd (VPS)  â†’  <Host>:<Port> yang Anda isi di tab Connection
+pgAdmin  →  sshd (VPS)  →  <Host>:<Port> yang Anda isi di tab Connection
 ```
 
 Arti kolom di pgAdmin:
 
 | Kolom | Diisi apa | Catatan |
 |-------|-----------|---------|
-| **SSH Tunnel â†’ Tunnel host** | `IP_VPS` | server SSH-nya |
-| **SSH Tunnel â†’ Tunnel port** | `22` | port SSH |
-| **Connection â†’ Host** | `127.0.0.1` | **alamat yang dilihat DARI DALAM VPS**, bukan dari laptop |
-| **Connection â†’ Port** | `5432` | port PostgreSQL di dalam VPS |
+| **SSH Tunnel → Tunnel host** | `IP_VPS` | server SSH-nya |
+| **SSH Tunnel → Tunnel port** | `22` | port SSH |
+| **Connection → Host** | `127.0.0.1` | **alamat yang dilihat DARI DALAM VPS**, bukan dari laptop |
+| **Connection → Port** | `5432` | port PostgreSQL di dalam VPS |
 
-Kesalahan paling umum: mengisi **Connection â†’ Host** dengan `127.0.0.1` **tanpa**
+Kesalahan paling umum: mengisi **Connection → Host** dengan `127.0.0.1` **tanpa**
 mengaktifkan SSH tunnel. Akibatnya pgAdmin mencoba `127.0.0.1:5432` di **laptop Anda
-sendiri** (bukan VPS) â†’ tidak ada PostgreSQL di sana â†’ koneksi ditutup.
+sendiri** (bukan VPS) → tidak ada PostgreSQL di sana → koneksi ditutup.
 
-Kesalahan kedua: mengisi **Connection â†’ Host** dengan `postgres-db` atau
+Kesalahan kedua: mengisi **Connection → Host** dengan `postgres-db` atau
 `IP_VPS`. Nama container tidak bisa di-resolve oleh `sshd` di host, dan port
-5432 tidak terbuka ke publik â€” dua-duanya gagal.
+5432 tidak terbuka ke publik — dua-duanya gagal.
 
-### Cara A â€” SSH Tunnel dari dalam pgAdmin 4
+### Cara A — SSH Tunnel dari dalam pgAdmin 4
 
 1. Pastikan port sudah di-bind di VPS (sekali saja):
    ```bash
@@ -465,21 +465,21 @@ Kesalahan kedua: mengisi **Connection â†’ Host** dengan `postgres-db` atau
    docker compose up -d --force-recreate postgres
    sudo ss -tlnp | grep 5432      # harus muncul 127.0.0.1:5432
    ```
-2. Di pgAdmin: klik kanan *Servers* â†’ **Register** â†’ **Serverâ€¦**
+2. Di pgAdmin: klik kanan *Servers* → **Register** → **Server…**
 3. Tab **General**: Name = `VPS Laravel`
 4. Tab **Connection**:
    - Host = `127.0.0.1`
    - Port = `5432`
-   - Maintenance database = `attendapp`
+   - Maintenance database = `laravel-test`
    - Username = `postgres`, Password = password DB Anda
 5. Tab **SSH Tunnel**: centang **Use SSH tunneling**
    - Tunnel host = `IP_VPS`
    - Tunnel port = `22`
    - Username = user SSH VPS Anda
    - Authentication = *Password* atau *Identity file* (private key)
-6. **Save** â†’ pgAdmin membuat tunnel otomatis.
+6. **Save** → pgAdmin membuat tunnel otomatis.
 
-### Cara B â€” tunnel manual via terminal (paling mudah didiagnosis)
+### Cara B — tunnel manual via terminal (paling mudah didiagnosis)
 
 ```bash
 ssh -N -L 5432:127.0.0.1:5432 user@IP_VPS
@@ -498,40 +498,40 @@ sudo ss -tlnp | grep 5432
 
 # 2) login langsung dari dalam VPS
 docker compose -f ~/projects/docker-ecosystem/db-postgres-docker/docker-compose.yml \
-  exec postgres psql -U postgres -d attendapp -c '\dt'
+  exec postgres psql -U postgres -d laravel-test -c '\dt'
 
 # 3) cek log container bila koneksi ditolak
 docker logs --tail=50 postgres-db
 ```
 
-> â— Jangan pernah memakai `ports: "5432:5432"` (tanpa `127.0.0.1:`). Itu membuka
+> ❗ Jangan pernah memakai `ports: "5432:5432"` (tanpa `127.0.0.1:`). Itu membuka
 > database ke seluruh internet. Binding loopback + SSH tunnel sudah cukup aman.
 
 
 ---
 
-## âš™ï¸ GitHub Actions (Auto Deploy)
+## ⚙️ GitHub Actions (Auto Deploy)
 
 | Repo | File workflow | Fungsi |
 |------|---------------|--------|
 | `docker-ecosystem` | `.github/workflows/deploy-infra.yml` | Validasi compose + deploy infra ke VPS |
 | `attendapp` | `.github/workflows/deploy.yml` | Test (PHPUnit) + deploy aplikasi (rebuild, migrate, cache) |
 
-> âš ï¸ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
+> ⚠️ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
 > Workflow di subfolder (mis. `app-laravel-docker/.github/...`) tidak akan dijalankan.
 
 ### Secrets di GitHub (isi di KEDUA repo)
 
-Repo â†’ **Settings** â†’ **Secrets and variables** â†’ **Actions** â†’ **New repository secret**:
+Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
 
 | Secret | Contoh | Keterangan |
 |--------|--------|------------|
 | `VPS_HOST` | `203.0.113.10` | IP/hostname VPS |
 | `VPS_USER` | `deployer` | user SSH untuk deploy |
-| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----â€¦` | **private key** SSH |
+| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----…` | **private key** SSH |
 | `VPS_PORT` | `22` | port SSH |
 | `VPS_INFRA_PATH` | `/home/deployer/projects/docker-ecosystem` | path repo infra di VPS |
-| `VPS_APP_PATH` | `/home/deployer/projects/attendapp` | path repo app (khusus repo Laravel) |
+| `VPS_APP_PATH` | `/home/deployer/projects/laravel-test` | path repo app (khusus repo Laravel) |
 
 ### Membuat SSH key khusus deploy
 
@@ -543,7 +543,7 @@ cat ~/.ssh/deploy_key      # salin seluruh isi ini ke secret VPS_SSH_KEY
 
 ---
 
-## ðŸ§° Cheatsheet Pemeliharaan
+## 🧰 Cheatsheet Pemeliharaan
 
 ```bash
 docker ps -a                                    # status semua container
@@ -1181,7 +1181,7 @@ bash tools/dns-check.sh attd.kovcc.web.id   # kalau domain belum resolve
 ---
 
 
-## ðŸ©º Troubleshooting
+## 🩺 Troubleshooting
 
 | Gejala | Sebab | Solusi |
 |--------|-------|--------|
