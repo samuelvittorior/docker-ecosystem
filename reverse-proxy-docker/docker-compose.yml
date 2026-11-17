@@ -19,6 +19,10 @@ services:
       # di akhir nginx/default.conf -- dipakai oleh tools/enable-https.sh untuk
       # mengaktifkan HTTPS/HTTP2 tanpa mengedit file utama.
       - ./nginx/extra:/etc/nginx/extra:ro
+      # Webroot verifikasi Let's Encrypt (HTTP-01). Certbot menulis file
+      # challenge ke folder ini, nginx menyajikannya di
+      # /.well-known/acme-challenge/ -> perpanjangan sertifikat tanpa downtime.
+      - ./nginx/certbot:/var/www/certbot:ro
     networks:
       - shared-network
 

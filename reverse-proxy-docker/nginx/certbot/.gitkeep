@@ -1,0 +1,9 @@
+# Webroot verifikasi Let's Encrypt (HTTP-01).
+#
+# Folder ini dipakai bersama oleh:
+#   - certbot (menulis file challenge ke .well-known/acme-challenge/)
+#   - nginx reverse proxy (menyajikan file itu lewat location ^~ /.well-known/)
+#
+# Isinya hanya file sementara saat verifikasi domain / perpanjangan sertifikat,
+# jadi TIDAK di-commit (lihat .gitignore). Folder ini harus ada agar bind-mount
+# di docker-compose.yml tidak membuatnya sebagai root-owned di host.

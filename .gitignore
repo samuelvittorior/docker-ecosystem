@@ -18,6 +18,14 @@ attendapp/
 reverse-proxy-docker/nginx/certs/*
 !reverse-proxy-docker/nginx/certs/.gitkeep
 
+# Webroot Let's Encrypt: hanya file challenge sementara, jangan di-commit
+reverse-proxy-docker/nginx/certbot/*
+!reverse-proxy-docker/nginx/certbot/.gitkeep
+
+# Hasil tools/enable-https.sh (berisi nama domain Anda, bukan rahasia, tapi
+# spesifik per server). Template-nya tetap di-commit: *.conf.example
+reverse-proxy-docker/nginx/extra/*.conf
+
 # Log & data runtime
 app-laravel-docker/storage/logs/*
 !app-laravel-docker/storage/logs/.gitkeep

@@ -564,6 +564,423 @@ docker system df
 
 ---
 
+## 🌐 Domain & HTTPS (Let's Encrypt + auto-perpanjang)
+
+Contoh di bagian ini memakai subdomain **`attd.kovcc.web.id`**. Ganti dengan
+domain Anda sendiri; polanya sama.
+
+### 0) Pembagian port & hasil akhir
+
+Satu port hanya bisa melayani **satu protokol**, jadi pembagiannya dibuat eksplisit:
+
+| Port host | Protokol | Fungsi | URL |
+|---|---|---|---|
+| **80** | HTTP | **Halaman default nginx** + verifikasi Let's Encrypt. **Bukan** aplikasi. | `http://IP_VPS` |
+| **8101** | HTTP | Aplikasi AttendApp (jalur lama, tetap dipakai) | `http://IP_VPS:8101`, `http://attd.kovcc.web.id:8101` |
+| **443** | HTTPS | Aplikasi AttendApp + HTTP/2 + HSTS | `https://attd.kovcc.web.id` |
+
+Semua bisa dipakai **bersamaan**; tidak perlu memilih.
+
+> **Kenapa port 80 tidak untuk aplikasi?** Sesuai permintaan: port 80 disisakan
+> sebagai halaman default nginx. Tapi endpoint verifikasi sertifikat
+> (`/.well-known/acme-challenge/`) **wajib** tetap ada di port 80, karena
+> Let's Encrypt selalu memverifikasi lewat port 80. Tanpa itu penerbitan dan
+> perpanjangan otomatis sertifikat akan gagal.
+
+> **Kenapa HTTPS tidak di 8101?** Karena 8101 sudah dipakai HTTP. Kalau Anda
+> lebih suka `https://attd.kovcc.web.id:8101` daripada port 443, lihat catatan
+> di `nginx/extra/attendapp-ssl.conf.example` (perlu mengubah mapping compose).
+
+> Satu hal yang **tidak** bisa: login di domain lalu tetap login saat membuka
+> IP:8101. Cookie session terikat ke host, jadi keduanya punya session sendiri.
+> Ini normal, bukan kerusakan.
+
+### 1) Arahkan subdomain ke IP VPS (di idwebhost)
+
+**1.1 Catat IP publik VPS**
+
+```bash
+curl -4 ifconfig.me
+```
+
+**1.2 Tambahkan A record di panel idwebhost**
+
+1. Login ke **idwebhost** → **cPanel** (atau *Client Area → Services → Login to cPanel*).
+2. Cari menu **DNS Zone Editor** (di cPanel biasanya di bagian *DOMAINS*).
+3. Pilih domain **`kovcc.web.id`** dari dropdown, lalu **Manage**.
+4. Klik **+ Add Record** dan isi:
+
+   | Kolom | Isi | Catatan |
+   |---|---|---|
+   | **Type** | `A` | IPv4 |
+   | **Name** | `attd` | **cukup label**, lihat catatan di bawah |
+   | **Record** / *Address* | `IP_VPS` | hasil langkah 1.1, mis. `203.0.113.10` |
+   | **TTL** | `14400` (atau default) | 4 jam; boleh lebih kecil saat uji |
+
+5. **Add Record** / **Save**.
+6. (Opsional) ulangi dengan **Name** `www` bila ingin `www.kovcc.web.id` juga.
+
+> ⚠️ **Kesalahan paling sering:** kolom **Name** diisi `attd.kovcc.web.id`.
+> Panel akan menambahkan nama domain lagi di belakangnya sehingga terbentuk
+> `attd.kovcc.web.id.kovcc.web.id` — domain tidak akan pernah resolve.
+> Cukup tulis **`attd`**.
+
+> ℹ️ Bila panel menampilkan record yang sudah ada untuk `kovcc.web.id` (root),
+> **jangan diubah**. Yang ditambahkan hanya record baru untuk `attd`.
+
+> ℹ️ Domain baru dari idwebhost biasanya sudah memakai nameserver idwebhost,
+> jadi A record langsung berlaku. Bila Anda memakai nameserver lain
+> (Cloudflare, Niagahoster, dll.), A record harus ditambahkan **di sana**,
+> bukan di cPanel idwebhost.
+
+**1.3 Verifikasi DNS (jangan lewati)**
+
+```bash
+# cara cepat
+dig +short attd.kovcc.web.id @1.1.1.1
+nslookup attd.kovcc.web.id 8.8.8.8
+
+# cara lengkap (menjelaskan SERVFAIL / NXDOMAIN + cek NS authoritative)
+bash tools/dns-check.sh attd.kovcc.web.id
+```
+
+Harus keluar **IP VPS Anda**. Lalu baca **status jawabannya** — ini yang
+membedakan "masih menunggu" dari "salah setting":
+
+| Status dari resolver publik | Artinya | Tindakan |
+|---|---|---|
+| `NOERROR` + IP VPS | benar | lanjut ke langkah SSL |
+| `NOERROR` tanpa A record | zone hidup, record tidak ada | periksa **Name = `attd`** (bukan `attd.kovcc.web.id`) |
+| `NXDOMAIN` | zone hidup, nama tidak ada | record belum dibuat / Name salah |
+| **`SERVFAIL`** | **nameserver authoritative gagal menjawab** | lihat catatan di bawah |
+
+> ⚠️ **`SERVFAIL` BUKAN propagasi biasa.** Propagasi menghasilkan `NOERROR` atau
+> `NXDOMAIN` (data lama atau tidak ada). `SERVFAIL` berarti nameserver domain
+> tidak bisa menjawab sama sekali. Penyebab umum:
+>
+> 1. **Domain masih baru** — zone belum dibuat/diaktifkan di DNS provider (paling
+>    sering pada domain `.web.id` yang baru dibeli). Cek lagi beberapa jam
+>    kemudian. Bila > 6 jam, hubungi support idwebhost dengan kalimat:
+>    *"zone kovcc.web.id mengembalikan SERVFAIL, mohon cek zone/NS-nya"*.
+> 2. **Nameserver domain belum mengarah ke idwebhost** — cek menu Domain →
+>    Nameserver di Client Area. Bila memakai nameserver lain (Cloudflare dll.),
+>    A record harus dibuat di sana, bukan di cPanel idwebhost.
+> 3. **Zone file rusak / record bentrok** (mis. CNAME di root bersamaan A record).
+>
+> Untuk memastikan, tanyakan langsung ke NS authoritative (bukan 8.8.8.8 yang
+> punya cache negatif): `bash tools/dns-check.sh attd.kovcc.web.id` (bagian 2–3).
+
+Bila status sudah `NOERROR` tetapi IP belum benar:
+
+- tunggu 1–30 menit (propagasi; TTL besar bisa sampai beberapa jam),
+- pastikan **Name** hanya `attd`, coba resolver lain (`@8.8.8.8`, `@1.1.1.1`),
+- di Windows: `ipconfig /flushdns`; di Linux: `sudo resolvectl flush-caches`.
+
+**1.4 Uji sebelum HTTPS**
+
+```
+http://attd.kovcc.web.id:8101
+```
+
+Harus **menampilkan aplikasi**. Perhatikan: **pakai `:8101`**, karena port 80
+sengaja hanya melayani halaman default nginx + verifikasi sertifikat.
+Kalau di sini sudah gagal, **jangan lanjut** ke langkah SSL: perbaiki DNS dulu.
+
+### 2) Buka port 80 & 443 di firewall VPS
+
+Let's Encrypt memverifikasi domain lewat **port 80**, dan HTTPS butuh **443**.
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw status | grep -E '80|443'
+```
+
+Bila VPS memakai Security Group (AWS/GCP/Azure), buka juga di panel cloud-nya.
+
+---
+
+
+### 3) Aktifkan HTTPS + HTTP/2
+
+```bash
+# sekali saja
+sudo apt-get update && sudo apt-get install -y certbot
+
+# ambil konfigurasi terbaru (berisi endpoint ACME + template SSL)
+cd ~/projects/docker-ecosystem && git pull
+cd reverse-proxy-docker && docker compose up -d --force-recreate && cd ..
+
+# minta sertifikat + tulis config + reload proxy
+sudo bash tools/enable-https.sh attd.kovcc.web.id email-anda@gmail.com
+```
+
+Ganti `email-anda@gmail.com` dengan email Anda (dipakai Let's Encrypt untuk
+notifikasi sertifikat hampir kedaluwarsa).
+
+**Yang dilakukan skrip, berurutan:**
+
+1. Cek DNS tiap domain vs IP publik VPS (peringatan bila beda).
+2. Pastikan reverse proxy hidup.
+3. **Preflight test**: menulis file uji ke `nginx/certbot/.well-known/...` lalu
+   mengambilnya lewat `http://attd.kovcc.web.id/...`. Ini membuktikan port 80,
+   DNS, dan bind-mount webroot benar **sebelum** memanggil certbot — jadi
+   kalau ada masalah, pesannya jelas (bukan error certbot yang membingungkan).
+4. `certbot certonly --webroot` → **tanpa mematikan proxy** (nol downtime).
+5. Menyalin `fullchain.pem` + `privkey.pem` ke `nginx/certs/`.
+6. Menulis `nginx/extra/attd.kovcc.web.id.conf` dari template
+   (`server_name` + `http2 on` + redirect http→https + HSTS).
+7. **Validasi `nginx -t` di container sekali-pakai**. Bila config salah, file
+   SSL dibatalkan dan proxy yang sedang melayani tetap hidup.
+8. Recreate proxy, lalu menguji `https://`, redirect 301, dan memastikan
+   `http://IP:8101` masih 200.
+
+### 4) Sesuaikan `.env` aplikasi
+
+Di **dua** file: `attendapp/.env` dan `app-laravel-docker/.env.docker`.
+
+```ini
+APP_URL=https://attd.kovcc.web.id
+APP_FORCE_HTTPS=false     # <-- WAJIB false (lihat penjelasan)
+```
+
+```bash
+cd ~/projects/docker-ecosystem/app-laravel-docker
+docker compose up -d --force-recreate app
+```
+
+**Kenapa `APP_FORCE_HTTPS=false`, bukan `true`?**
+
+`AppServiceProvider` memanggil `URL::forceScheme('https')` **tanpa syarat** bila
+nilai ini `true`. Artinya *semua* URL — termasuk yang dibuat saat Anda membuka
+`http://IP:8101` — akan menjadi `https://IP:8101`, padahal IP tidak punya
+sertifikat → halaman gagal/mixed content. Jadi:
+
+| `APP_FORCE_HTTPS` | `https://domain` | `http://IP:8101` |
+|---|---|---|
+| `false` (disarankan) | benar (https) | benar (http) |
+| `true` | benar (https) | **rusak** (aset & redirect ke https://IP) |
+
+Dengan `false`, Laravel mengikuti skema request sebenarnya. Itu hanya bisa
+bekerja bila header `X-Forwarded-Proto` dari nginx **dipercaya** — karena itu
+`app/Http/Middleware/TrustProxies.php` di repo aplikasi diisi:
+
+```php
+protected $proxies = '*';
+```
+
+Sebelumnya properti itu kosong, sehingga `X-Forwarded-Proto` diabaikan dan
+halaman https tetap menghasilkan URL `http://` (CSS/JS diblokir browser
+sebagai mixed content). Bila Anda memakai repo aplikasi versi lama, pastikan
+perubahan ini sudah ikut (`git pull`).
+
+### 5) Verifikasi hasil
+
+```bash
+# 1. https melayani aplikasi
+curl -sI https://attd.kovcc.web.id | head -3
+
+# 2. port 80 untuk domain ini: HANYA verifikasi sertifikat
+curl -sI http://attd.kovcc.web.id | head -2              # 200 + teks pendek (bukan aplikasi)
+
+# 3. HTTP/2 aktif di 443
+curl -sI https://attd.kovcc.web.id | head -1        # harus "HTTP/2 200"
+
+# 4. sertifikat benar & berlaku 90 hari
+echo | openssl s_client -servername attd.kovcc.web.id -connect attd.kovcc.web.id:443 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates
+
+# 5. jalur lama masih hidup (HTTP)
+curl -sI http://IP_VPS:8101/ | head -1                    # 200/302 (BUKAN error)
+```
+
+Di browser: buka `https://attd.kovcc.web.id`, cek **gembok**, lalu buka
+**DevTools → Console** — harus **tidak ada** peringatan *mixed content*.
+DevTools → Network → kolom **Protocol** harus `h2`.
+
+
+### 6) Perpanjangan otomatis (auto-renew)
+
+Sertifikat Let's Encrypt berlaku **90 hari**. Skrip `tools/renew-https.sh`
+memperpanjang lewat **webroot** (proxy tetap hidup, **nol downtime**), lalu
+menyalin sertifikat baru ke `nginx/certs/` dan me-reload nginx.
+
+**6.1 Uji dulu tanpa mengubah apa pun**
+
+```bash
+cd ~/projects/docker-ecosystem
+sudo bash tools/renew-https.sh --dry-run
+```
+
+**6.2 Uji sungguhan (aman; hanya memperpanjang bila sisa < 30 hari)**
+
+```bash
+sudo bash tools/renew-https.sh
+```
+
+**6.3 Pasang cron harian**
+
+```bash
+sudo crontab -e
+```
+
+Tambahkan satu baris (sesuaikan path repo & user):
+
+```cron
+# Perpanjang sertifikat Let's Encrypt tiap hari 03:17, catat log
+17 3 * * * cd /home/deployer/projects/docker-ecosystem && /usr/bin/bash tools/renew-https.sh >> /var/log/cert-renew.log 2>&1
+```
+
+Cek hasilnya kapan saja:
+
+```bash
+sudo tail -30 /var/log/cert-renew.log
+```
+
+> **Kenapa tidak cukup `certbot renew` bawaan?**
+> Paket `certbot` dari apt sudah memasang timer `certbot.timer`, dan timer itu
+> memang memperpanjang sertifikat di `/etc/letsencrypt/`. Tetapi nginx memakai
+> **salinan** di `nginx/certs/`, dan salinan itu hanya diperbarui oleh
+> `tools/renew-https.sh`. Jadi biarkan timer berjalan (tidak berbahaya —
+> `certbot renew` idempoten) **dan** pasang cron di atas. Kalau ingin satu
+> sumber saja: `sudo systemctl disable --now certbot.timer`, lalu andalkan cron.
+
+> **Catatan keamanan:** jangan commit isi `nginx/certs/`. Sudah di-`.gitignore`
+> (`certs/*` dikecualikan, hanya `.gitkeep` yang ikut). Private key
+> (`.key`) diberi permission `640`.
+
+### 7) Menambah subdomain/domain lain nanti
+
+Skrip ini membuat **satu file config per domain**, jadi tidak saling menimpa.
+
+```bash
+# subdomain lain untuk aplikasi yang sama (file config terpisah)
+sudo bash tools/enable-https.sh absen.kovcc.web.id email-anda@gmail.com
+
+# atau satu sertifikat untuk beberapa nama sekaligus (SAN, lebih hemat)
+sudo bash tools/enable-https.sh attd.kovcc.web.id email-anda@gmail.com www.kovcc.web.id
+```
+
+Setelah itu tambahkan A record baru di idwebhost (langkah 1) untuk tiap nama.
+
+#### 7a) Aplikasi LAIN (port lain) juga bisa dapat HTTPS di port 443 — bukan cuma satu app
+
+Ini pertanyaan yang sering muncul: *"kalau nanti ada app kedua yang jalan di
+port 8102, apakah bisa tampil di `https://app2.domain.com` **tanpa** menulis
+port di URL? Bukankah IP publik cuma satu?"*
+
+**Bisa, dan itulah fungsi reverse proxy.** Satu IP publik **tidak** berarti satu
+aplikasi. nginx memilih tujuan berdasarkan **nama domain**, bukan port:
+
+| Lapisan | Yang menentukan tujuan |
+|---|---|
+| HTTP (port 80) | header `Host: app2.domain.com` |
+| HTTPS (port 443) | **SNI** saat TLS handshake (`server_name` pada blok `listen 443 ssl`) |
+
+Jadi alurnya:
+
+```
+Pengunjung -> https://app2.kovcc.web.id  (port 443, tanpa port aneh)
+           -> nginx reverse-proxy (1 IP publik, TLS berakhir di sini)
+           -> proxy_pass http://app2-nginx:80   (jaringan Docker internal)
+           -> aplikasi kedua
+```
+
+Yang penting dipahami:
+
+- Port internal aplikasi (8101, 8102, 8500, …) **tidak ada hubungannya** dengan
+  URL publik. Pengunjung selalu melihat 443.
+- Port internal itu bahkan **tidak perlu dibuka** di UFW. Kalau hanya diakses
+  lewat domain, bind saja ke `127.0.0.1:8102` atau jangan `ports:` sama sekali
+  (cukup `expose:`), sehingga tidak ada jalur bypass HTTPS.
+- Jumlah subdomain yang bisa dilayani **tidak terbatas** oleh 1 IP publik —
+  batasnya RAM/CPU VPS.
+- Yang **tidak** bisa: dua aplikasi berbeda berbagi satu port untuk protokol
+  **non-HTTP** (mis. SSH, game server, protokol TCP kustom). Untuk protokol
+  seperti itu tidak ada `Host`/SNI untuk memilih tujuan, jadi tetap butuh port
+  atau IP berbeda.
+
+Caranya di repo ini — cukup satu perintah dengan `--upstream`:
+
+```bash
+# 1. A record app2.kovcc.web.id -> IP VPS (idwebhost), tunggu resolve
+bash tools/dns-check.sh app2.kovcc.web.id
+
+# 2. Aktifkan HTTPS untuk aplikasi kedua
+sudo bash tools/enable-https.sh app2.kovcc.web.id email-anda@gmail.com \
+     --upstream app2-nginx:80
+```
+
+`--upstream` berisi `host:port` **di dalam jaringan Docker**, bukan di host.
+Syaratnya container nginx aplikasi kedua berada di network yang sama dengan
+`reverse-proxy` (`shared-network`). Kalau belum:
+
+```bash
+docker network connect shared-network <container-nginx-app2>
+# atau tambahkan di docker-compose.yml aplikasi:
+#   networks: [default, shared-network]
+#   networks: { shared-network: { external: true } }
+```
+
+Skrip akan memperingatkan dan **berhenti secara default** bila nama upstream
+tidak bisa di-resolve dari dalam container `reverse-proxy` — supaya kamu tidak
+mendapat 502 yang membingungkan setelah sertifikat terbit.
+
+Hasilnya:
+
+```
+nginx/extra/app2.kovcc.web.id.conf   -> listen 443 ssl; server_name app2.kovcc.web.id;
+                                        proxy_pass http://app2-nginx:80;
+nginx/certs/app2.kovcc.web.id.crt/.key
+```
+
+`tools/renew-https.sh` otomatis ikut memperpanjang **semua** sertifikat yang
+ada di `nginx/certs/*.crt`, jadi tidak perlu cron tambahan per aplikasi.
+
+Bila satu domain dipakai dua aplikasi (mis. `domain.com` untuk web dan
+`api.domain.com` untuk API di container lain), itu tetap dua entri berbeda —
+satu `server_name` per file config, upstream masing-masing.
+
+#### 7b) Bandingkan dengan Cloudflare Tunnel
+
+Pola pikirnya **sama** (aplikasi di port internal, publik di 443), bedanya
+lokasi reverse proxy-nya:
+
+| | Reverse proxy di VPS (repo ini) | Cloudflare Tunnel |
+|---|---|---|
+| Butuh IP publik | ya | tidak (koneksi keluar dari origin) |
+| Butuh port 80/443 terbuka | ya (80 wajib untuk HTTP-01) | tidak |
+| Sertifikat TLS | Let's Encrypt (kamu yang punya) | otomatis di edge Cloudflare |
+| Origin IP tersembunyi | tidak | ya |
+| Trafik masuk | langsung ke VPS | lewat jaringan Cloudflare |
+| Biaya | gratis (+ domain) | gratis, kecuali fitur lanjutan |
+| Cocok bila | punya VPS dengan IP publik | ISP blokir 80/443, atau tak mau buka port |
+
+Keduanya **tidak saling meniadakan**: `cloudflared` bisa diarahkan ke
+`http://reverse-proxy:80` sehingga aturan routing tetap satu tempat di nginx.
+Pilih tunnel bila VPS tidak punya IP publik / port 80 diblokir ISP; kalau IP
+publik dan port 80/443 bebas, nginx biasa lebih sederhana (tidak ada
+ketergantungan ke pihak ketiga).
+
+### 8) Troubleshooting domain & SSL
+
+| Gejala | Sebab | Solusi |
+|---|---|---|
+| `nslookup/dig attd.kovcc.web.id` -> **`SERVFAIL`** | nameserver authoritative gagal menjawab - **bukan** propagasi biasa (domain baru belum aktif, NS belum mengarah ke idwebhost, atau zone rusak) | jalankan `bash tools/dns-check.sh attd.kovcc.web.id`; bila >6 jam tetap SERVFAIL, hubungi support idwebhost |
+| `dig +short attd.kovcc.web.id` kosong tetapi status `NOERROR`/`NXDOMAIN` | A record belum ada atau **Name** salah | pastikan **Name = `attd`** (bukan `attd.kovcc.web.id`); tunggu 1-30 menit; coba resolver lain |
+| `http://IP_VPS:8101` atau `attd.kovcc.web.id:8101` -> **522/523/524** atau timeout | port 8101 tertutup firewall | `sudo ufw allow 8101/tcp`; cek Security Group cloud |
+| `http://attd.kovcc.web.id` (tanpa port) menampilkan teks "Port 80 hanya untuk verifikasi" | memang disengaja: port 80 bukan jalur aplikasi | pakai `https://attd.kovcc.web.id` atau `http://attd.kovcc.web.id:8101`. Ini **bukan** error |
+| `certbot: Challenge failed ... Invalid response` | port 80 tertutup di tengah jalan, atau ada proxy/CDN di depan | pastikan tidak ada Cloudflare *proxy* (awan oranye) saat penerbitan awal; gunakan DNS-only dulu |
+| `nginx: [warn] conflicting server name "attd.kovcc.web.id"` | nama domain didaftarkan juga di `default.conf` | hapus dari `server_name` di `default.conf`; cukup `_` (default_server) |
+| `nginx: [emerg] cannot load certificate` | file `.crt`/`.key` tidak ada di `nginx/certs/` | jalankan `sudo bash tools/enable-https.sh ...`; atau hapus `nginx/extra/<domain>.conf` lalu recreate |
+| Halaman https tampil **tanpa CSS/JS** (Console: *mixed content*) | `X-Forwarded-Proto` tidak dipercaya | pastikan `TrustProxies::$proxies = '*'` di repo aplikasi + `config:cache` ulang |
+| `http://IP:8101` error setelah pasang SSL | `APP_FORCE_HTTPS=true` | ubah ke `false`, lalu `docker compose up -d --force-recreate app` |
+| Browser menolak http:// setelah pernah https | HSTS (1 tahun) | memang disengaja; gunakan https, atau hapus header HSTS di template lalu tunggu cache browser |
+| Renewal gagal tiap hari di log | cron jalan sebelum proxy hidup, atau cert lama masih mode standalone | jalankan `sudo bash tools/renew-https.sh` manual; pastikan proxy `restart: unless-stopped` |
+
+---
+
+
 ## âš¡ Optimasi Performa (gzip, HTTP/2, HTTPS, cache)
 
 Halaman Laravel ini memuat **ratusan file JS/CSS (>14 MB mentah)**. Yang membuatnya
@@ -603,20 +1020,21 @@ Prasyarat: domain sudah mengarah (A record) ke IP VPS, port 80/443 terbuka, dan
 
 ```bash
 cd ~/projects/docker-ecosystem
-bash tools/enable-https.sh app.attendapp.com admin@attendapp.com
+sudo bash tools/enable-https.sh attd.kovcc.web.id email-anda@gmail.com
 ```
 
-Skrip ini: menghentikan proxy sementara â†’ meminta sertifikat â†’ menyalin ke
-`reverse-proxy-docker/nginx/certs/` â†’ menulis
-`reverse-proxy-docker/nginx/extra/attendapp-ssl.conf` (blok 443 + redirect
-httpâ†’https + `http2 on`) â†’ menjalankan ulang proxy â†’ menguji hasilnya.
+Skrip ini memakai mode WEBROOT (proxy TIDAK dimatikan, nol downtime): meminta sertifikat, menyalin ke
+`reverse-proxy-docker/nginx/certs/` lalu menulis
+`reverse-proxy-docker/nginx/extra/<domain>.conf` (blok 443 ssl + `http2 on`,
+sedangkan port 80 hanya untuk verifikasi sertifikat), menjalankan ulang proxy,
+dan menguji `https://<domain>`, `http://<domain>:8101`, serta `http://IP:8101`.
 
 Setelah HTTPS berjalan, ubah di **dua** tempat:
 
 ```ini
 # attendapp/.env  dan  app-laravel-docker/.env.docker
-APP_URL=https://app.attendapp.com
-APP_FORCE_HTTPS=true
+APP_URL=https://attd.kovcc.web.id
+APP_FORCE_HTTPS=false   # WAJIB false bila IP:8101 masih dipakai
 ```
 
 ```bash
@@ -693,22 +1111,25 @@ Cara membaca hasilnya:
 
 ## 🛠 Tools Bantu (opsional)
 
-Dua skrip di `tools/` untuk mempermudah operasional di VPS:
+Lima skrip di `tools/` untuk mempermudah operasional di VPS:
 
 | Skrip | Fungsi |
 |---|---|
 | `tools/diagnose.sh` | **Read-only.** 16 pemeriksaan: status container, port, anggota `shared-network`, config nginx yang benar-benar dimuat (`nginx -T`), tes DNS & HTTP berlapis, cek PHP-FPM, tail log. Jalankan saat ada 502. |
 | `tools/reset-stack.sh` | Membersihkan container sisa bernama lama, recreate reverse proxy, build & jalankan stack aplikasi, lalu verifikasi DNS + HTTP. **Tidak** menghapus volume data. |
 | `tools/perf-check.sh` | **Read-only.** Cek penyebab lambat dengan angka: RAM/swap, `docker stats`, apakah gzip aktif, **TTFB dari dalam VPS**, cache config/route/view, OPcache, setelan PostgreSQL, memori Redis. |
-| `tools/enable-https.sh` | Mengaktifkan **HTTPS + HTTP/2** (Let's Encrypt): buat sertifikat â†’ salin ke `nginx/certs/` â†’ tulis `nginx/extra/attendapp-ssl.conf` â†’ recreate proxy â†’ uji. Idempoten (aman dijalankan ulang untuk perpanjangan). |
+| `tools/enable-https.sh` | Mengaktifkan **HTTPS + HTTP/2** (Let's Encrypt, mode webroot tanpa downtime): cek DNS + preflight ACME, cek upstream, minta sertifikat, salin ke `nginx/certs/`, tulis `nginx/extra/<nama>.conf`, validasi config di container sekali-pakai, recreate proxy, lalu uji. Idempoten. Opsi `--upstream host:port` untuk **aplikasi lain** (mis. `--upstream app2-nginx:80`) dan `--name` untuk satu domain dengan >1 aplikasi. |
+| `tools/renew-https.sh` | **Perpanjangan otomatis** tanpa downtime: `certbot renew` (webroot) -> salin sertifikat yang berubah -> `nginx -s reload`. Jalankan via cron; ada `--dry-run`. |
+| `tools/dns-check.sh` | **Read-only.** Diagnosa DNS sebelum pasang SSL: NS domain, SOA dari NS authoritative, A record, terjemahan status `NOERROR`/`NXDOMAIN`/**`SERVFAIL`**, dan jejak delegasi. Jalankan saat domain belum resolve. |
 
 ```bash
 cd ~/projects/docker-ecosystem
 bash tools/diagnose.sh      # kalau ada masalah (502, 404, dll)
 bash tools/perf-check.sh    # kalau terasa lambat
 bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
-bash tools/enable-https.sh app.attendapp.com admin@attendapp.com   # aktifkan HTTPS
-```
+sudo bash tools/enable-https.sh attd.kovcc.web.id email@gmail.com   # aktifkan HTTPS
+sudo bash tools/renew-https.sh            # perpanjang (cron harian)
+bash tools/dns-check.sh attd.kovcc.web.id   # kalau domain belum resolve
 
 > **Penting — nama service ≠ nama DNS.** Nama yang bisa di-resolve antar
 > container hanyalah **nama service Compose** atau **`aliases`** pada network,
@@ -750,7 +1171,7 @@ bash tools/enable-https.sh app.attendapp.com admin@attendapp.com   # aktifkan HT
 | Perubahan konfigurasi Nginx tidak berlaku | container belum di-recreate | `docker compose up -d --force-recreate <service>` (nginx tidak reload otomatis) |
 | **Aplikasi terasa lambat, padahal `php artisan` cepat** | gzip/HTTP2 belum aktif, atau aset tidak ter-cache, atau latency datacenter | jalankan `bash tools/perf-check.sh`. Bila TTFB dari dalam VPS kecil (<300 ms) tetapi dari browser lambat -> masalah jaringan/aset: aktifkan HTTP/2 (`tools/enable-https.sh`) dan/atau pasang CDN |
 | **Aset `.css`/`.js` terkirim ukuran penuh (tidak terkompresi)** | container nginx belum di-recreate setelah `gzip` ditambahkan; atau CDN memblokir karena header `no-transform` | `docker compose up -d --force-recreate` di `app-laravel-docker` dan `reverse-proxy-docker`; cek `curl -sI -H 'Accept-Encoding: gzip' http://127.0.0.1:8101/form/css/style.css \| grep -i content-encoding` |
-| **`nginx: [emerg] cannot load certificate`** setelah mengaktifkan HTTPS | file `.crt`/`.key` tidak ada di `reverse-proxy-docker/nginx/certs/` | jalankan `bash tools/enable-https.sh <domain> <email>`; bila sertifikat sudah tidak dipakai, hapus `nginx/extra/attendapp-ssl.conf` lalu recreate proxy |
+| **`nginx: [emerg] cannot load certificate`** setelah mengaktifkan HTTPS | file `.crt`/`.key` tidak ada di `reverse-proxy-docker/nginx/certs/` | jalankan `bash tools/enable-https.sh <domain> <email>`; bila sertifikat sudah tidak dipakai, hapus `nginx/extra/<domain>.conf` lalu recreate proxy |
 | **VPS terasa lambat + `swap` terpakai** | `POSTGRES_TUNING` terlalu besar untuk RAM VPS | turunkan profil di `db-postgres-docker/.env.docker` (`large` -> `medium`/`small`), lalu terapkan lewat psql + `docker restart postgres-db` |
 | `nginx: [emerg] a duplicate default server for 0.0.0.0:80` | ada 2 blok `default_server` di port 80 | pastikan hanya **satu** blok yang memakai `default_server` |
 | **pgAdmin: `connection to server at "127.0.0.1", port ... failed: server closed the connection unexpectedly`** | (a) SSH Tunnel tidak dicentang, atau (b) port 5432 belum di-bind ke `127.0.0.1` di VPS | centang *Use SSH tunneling* + isi Tunnel host = IP VPS; lalu di VPS `docker compose up -d --force-recreate postgres` dan cek `ss -tlnp \| grep 5432` |
@@ -772,13 +1193,14 @@ bash tools/enable-https.sh app.attendapp.com admin@attendapp.com   # aktifkan HT
   `POSTGRES_TUNING` (`small|medium|large|custom`) di `db-postgres-docker/.env.docker`,
   yang dibaca oleh `db-postgres-docker/postgres/conf.d/shared-buffer.sql`.
   Default `large` = VPS Â±6 GB (shared_buffers 1536 MB, work_mem 32 MB).
-- **HTTPS:** blok SSL **dipisah** ke `reverse-proxy-docker/nginx/extra/` (template
-  `attendapp-ssl.conf.example`) supaya `default.conf` tetap valid sebelum
-  sertifikat ada. Aktifkan dengan `bash tools/enable-https.sh <domain> <email>`
-  (lihat bagian **Optimasi Performa**).
-- **Kompresi gzip** aktif di kedua nginx. Jika aset masih terkirim mentah,
-  container belum di-recreate (`nginx` tidak reload otomatis untuk file yang
-  di-bind-mount).
+- **HTTPS:** blok SSL **dipisah** ke `reverse-proxy-docker/nginx/extra/` (satu file per
+  domain, dari template `attendapp-ssl.conf.example`) supaya `default.conf` tetap valid
+  sebelum sertifikat ada. Aktifkan dengan `sudo bash tools/enable-https.sh <domain> <email>`,
+  perpanjangan otomatis dengan `sudo bash tools/renew-https.sh` + cron. Panduan lengkap:
+  bagian **Domain & HTTPS**.
+- **Dual access (domain + IP:8101):** biarkan `APP_FORCE_HTTPS=false` dan pastikan
+  `TrustProxies::$proxies = '*'` di repo aplikasi. Menyalakan `APP_FORCE_HTTPS=true`
+  akan merusak akses lewat `http://IP:8101` (diarahkan ke https yang tidak punya sertifikat).
 - **Penting saat update kode aplikasi:** `git pull` di VPS tidak menghapus `vendor/`
   yang isinya tidak lengkap/korup (vendor di-`.gitignore`). Bila `vendor/autoload.php`
   ada padahal paketnya tidak lengkap, entrypoint menganggap instalasi sudah selesai.

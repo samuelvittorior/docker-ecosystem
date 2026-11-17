@@ -1,40 +1,83 @@
 # =============================================================================
-# HTTPS + HTTP/2 untuk AttendApp (TEMPLATE)
+# HTTPS + HTTP/2 untuk satu domain/subdomain (TEMPLATE)
 #
 # File ini TIDAK dimuat nginx (hanya *.conf di folder ini yang dimuat).
 # Jangan dipakai manual: jalankan skrip yang mengisinya otomatis:
 #
-#     bash tools/enable-https.sh <domain> <email>
+#     sudo bash tools/enable-https.sh attd.kovcc.web.id email@gmail.com
 #
-# Skrip tersebut membuat sertifikat Let's Encrypt, menyalinnya ke
-# nginx/certs/, lalu menulis versi file ini (tanpa akhiran .example) dengan
-# nama domain & sertifikat yang benar.
+# Skrip tersebut:
+#   1. meminta sertifikat Let's Encrypt lewat webroot di port 80
+#      (proxy tidak dimatikan -> penerbitan & perpanjangan tanpa downtime)
+#   2. menyalin sertifikat ke nginx/certs/
+#   3. menulis versi file ini (tanpa akhiran .example) dengan domain asli
+#   4. memvalidasi config di container sekali-pakai
+#   5. me-recreate reverse proxy lalu menguji hasilnya
+#
+# Placeholder yang diganti skrip:
+#   __CERT_NAME__     -> nama file sertifikat (domain utama),
+#                        mis. attd.kovcc.web.id
+#   __SERVER_NAMES__  -> semua nama domain dipisah spasi
+#   __UPSTREAM__      -> tujuan proxy, "host:port" DI DALAM jaringan Docker
+#                        (default: attendapp-nginx:80). Untuk aplikasi lain,
+#                        mis. nginx-app2:80 atau app2-nginx:80.
+#
+# TEMPLATE INI BERSIFAT UMUM: satu file = satu domain/subdomain. Untuk
+# aplikasi lain, cukup jalankan tools/enable-https.sh dengan --upstream lain,
+# sehingga satu IP publik + port 443 bisa melayani BANYAK subdomain
+# (name-based virtual hosting lewat SNI/Host header).
+#
+# PEMBAGIAN PORT (penting):
+#   port 80   -> HANYA verifikasi sertifikat. Halaman default nginx tetap
+#                yang tampil (lihat reverse-proxy-docker/nginx/default.conf).
+#   port 8101 -> aplikasi lewat HTTP  (http://IP_VPS:8101, http://domain:8101).
+#                Blok 8101 ada di default.conf, bukan di sini.
+#   port 443  -> aplikasi lewat HTTPS (https://domain) + HTTP/2.
+#
+# Satu port hanya bisa satu protokol. Karena 8101 sudah dipakai HTTP (8080 di
+# container), HTTPS untuk 8101 tidak dibuat di sini. Bila Anda lebih suka
+# https://domain:8101, ubah docker-compose.yml menjadi "${APP_HTTPS_PORT:-8101}:8101"
+# dan tambahkan blok `listen 8101 ssl;` (salin pola blok 443 di bawah).
 # =============================================================================
 
-# Redirect seluruh trafik http:// ke https:// untuk domain ini.
+# -----------------------------------------------------------------------------
+# Port 80: hanya untuk Let's Encrypt (HTTP-01). Aplikasi TIDAK dilayani di sini.
+#
+# Blok ini juga yang dipakai saat PERPANJANGAN sertifikat, karena Let's Encrypt
+# selalu memverifikasi lewat port 80 (bukan port 443/8101).
+# -----------------------------------------------------------------------------
 server {
     listen 80;
-    server_name __DOMAIN__;
+    server_name __SERVER_NAMES__;
 
-    location /.well-known/acme-challenge/ {
+    location ^~ /.well-known/acme-challenge/ {
         root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
     }
 
+    # Request lain di port 80: jangan diteruskan ke aplikasi.
+    # (Blok default_server di default.conf yang menangani Host lain.)
+    # Kode 200 + teks singkat: tidak terlihat seperti situs rusak.
     location / {
-        return 301 https://$host$request_uri;
+        default_type text/plain;
+        return 200 "Port 80 hanya untuk verifikasi sertifikat. Akses aplikasi lewat https://$host";
     }
 }
 
+# -----------------------------------------------------------------------------
+# Port 443: aplikasi lewat HTTPS.
+# -----------------------------------------------------------------------------
 server {
     listen 443 ssl;
-    server_name __DOMAIN__;
+    server_name __SERVER_NAMES__;
 
     # HTTP/2. Sejak nginx 1.25.1 HTTP/2 diaktifkan lewat directive `http2 on`
     # (bentuk `listen 443 ssl http2` sudah usang dan memunculkan warning).
     http2 on;
 
-    ssl_certificate     /etc/nginx/certs/__DOMAIN__.crt;
-    ssl_certificate_key /etc/nginx/certs/__DOMAIN__.key;
+    ssl_certificate     /etc/nginx/certs/__CERT_NAME__.crt;
+    ssl_certificate_key /etc/nginx/certs/__CERT_NAME__.key;
 
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
@@ -42,16 +85,16 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
-    # HSTS. Aktif 1 tahun (termasuk subdomain). Hapus baris ini bila nanti
-    # domain ingin dipakai kembali lewat http (sulit dibatalkan browser).
+    # HSTS: browser selalu memakai https untuk domain ini (1 tahun).
+    # Tidak memengaruhi http://IP_VPS:8101 (IP tidak punya HSTS).
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 
-    set $attendapp_upstream "http://attendapp-nginx:80";
+    set $site_upstream "http://__UPSTREAM__";
 
     client_max_body_size 64m;
 
     location / {
-        proxy_pass $attendapp_upstream;
+        proxy_pass $site_upstream;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -67,7 +110,7 @@ server {
     }
 
     location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2)$ {
-        proxy_pass $attendapp_upstream;
+        proxy_pass $site_upstream;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
