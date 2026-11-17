@@ -544,6 +544,11 @@ Tiga jebakan yang membuat "sudah `git pull` tapi tidak ada perubahan":
    sampai container `app` di-recreate.
 3. **`.env.docker`** dibaca saat container start → wajib recreate container,
    bukan cukup reload nginx.
+4. **`app` perlu waktu menyala.** Entrypoint menunggu PostgreSQL, menunggu Redis,
+   `optimize:clear`, `composer install` (bila `vendor/` belum ada), dan `migrate`
+   **sebelum** PHP-FPM siap. Selama proses itu nginx menjawab **502** — normal.
+   Tunggu sampai: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8101/login`
+   mengembalikan `200` (biasanya 10–60 detik).
 
 Verifikasi setelah deploy:
 
@@ -589,6 +594,115 @@ ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/deploy_key -N ""
 ssh-copy-id -i ~/.ssh/deploy_key.pub user@IP_VPS
 cat ~/.ssh/deploy_key      # salin seluruh isi ini ke secret VPS_SSH_KEY
 ```
+
+### Akses `git pull` di VPS (deploy key) — wajib untuk repo privat
+
+Deploy dari GitHub Actions menjalankan `git pull` **di dalam VPS**, bukan di runner.
+Karena itu VPS sendiri harus punya kredensial ke repo aplikasi. Tanpa ini, deploy
+berhenti dengan:
+
+```
+fatal: could not read Username for 'https://github.com': No such device or address
+```
+
+Gejala itu berarti: remote repo masih **HTTPS**, repo **privat**, dan git butuh
+username/password — sedangkan sesi Actions tidak punya terminal untuk menanyakannya.
+Catatan: GitHub **sudah tidak menerima password akun**; yang diterima hanya token
+(PAT) atau SSH key.
+
+Pilihan kredensial:
+
+| Cara | Aman? | Kapan dipakai |
+|------|-------|---------------|
+| **Deploy key (SSH, read-only)** | ✅ terbaik | Hanya untuk `git pull` 1 repo. Bisa dicabut kapan saja, tanpa masa berlaku token |
+| Fine-grained PAT (Contents: Read) | ⚠️ cukup | Ingin tetap HTTPS. Token harus punya expiry & dirotasi |
+| Classic PAT (scope `repo`) | ❌ hindari | Scope terlalu luas (semua repo) |
+| Password akun GitHub | ❌ tidak bisa | Sudah dihapus GitHub sejak 2021 |
+
+#### Langkah deploy key (dijalankan **sebagai user deploy**, bukan root)
+
+```bash
+ssh user@IP_VPS                     # user yang sama dengan secret VPS_USER
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+
+# 1) Buat key KHUSUS repo ini (tanpa passphrase agar bisa dipakai non-interaktif)
+ssh-keygen -t ed25519 -C "vps-attendapp-deploy" -f ~/.ssh/id_attendapp -N ""
+cat ~/.ssh/id_attendapp.pub          # salin seluruh baris ini
+```
+
+Kunci privat (`~/.ssh/id_attendapp`) **tetap di VPS** dan tidak pernah masuk secret
+GitHub — beda dengan `VPS_SSH_KEY` yang dipakai Actions untuk masuk ke VPS.
+
+```text
+2) Buka repo aplikasi di GitHub -> Settings -> Deploy keys -> Add deploy key
+   Title : vps-attendapp
+   Key   : <isi ~/.ssh/id_attendapp.pub>
+   [ ] Allow write access   <- BIARKAN KOSONG (deploy hanya membaca)
+```
+
+```bash
+# 3) Daftarkan key di ~/.ssh/config (agar tidak menimpa key default user ini)
+cat >> ~/.ssh/config <<'EOF'
+
+Host github-attendapp
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_attendapp
+    IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+
+# 4) Ubah remote dari HTTPS ke SSH memakai alias di atas
+cd ~/projects/attendapp
+git remote set-url origin git@github-attendapp:OWNER/attendapp.git   # ganti OWNER
+git remote -v                                                        # git@github-attendapp:...
+```
+
+```bash
+# 5) Verifikasi TANPA prompt password
+ssh -T git@github-attendapp
+#   -> Hi OWNER/attendapp! You've successfully authenticated, but GitHub does
+#      not provide shell access.
+git fetch --all --prune && git pull --ff-only origin main && echo "PULL OK"
+```
+
+`User git` di `~/.ssh/config` memang begitu dari GitHub (bukan akun bernama `git`).
+
+Bila `ssh -T` gagal `Permission denied (publickey)`: pastikan key ditambahkan di
+**repo yang benar**, dan file key/config dimiliki user deploy —
+`sudo chown user:user ~/.ssh/id_attendapp ~/.ssh/config`.
+
+#### Alternatif: fine-grained PAT (tetap HTTPS)
+
+Jangan menaruh token di URL remote (bisa terbaca lewat `git remote -v`). Pakai
+credential store:
+
+```bash
+cd ~/projects/attendapp
+git remote set-url origin https://github.com/OWNER/attendapp.git   # tanpa token
+
+git config --global credential.helper store
+printf 'https://USERNAME:%s@github.com\n' 'PASTE_PAT_DI_SINI' > ~/.git-credentials
+chmod 600 ~/.git-credentials
+
+git fetch --all --prune && echo "FETCH OK"
+```
+
+PAT fine-grained cukup diberi **Repository access: hanya repo ini** +
+**Permissions → Contents: Read-only**.
+
+> ⚠️ Berbeda dengan deploy key: file `~/.git-credentials` menyimpan token **dalam
+> bentuk yang bisa dipakai ulang**, untuk **semua** repo yang diizinkan token itu.
+> Kalau token bocor, penyerang bisa `git clone` semua repo tersebut. Deploy key
+> terbatas pada satu repo dan bisa dicabut tanpa mengubah kredensial lain — itu
+> sebabnya deploy key lebih disarankan.
+
+#### Ringkasan: dua key berbeda, dua fungsi berbeda
+
+| Key | Disimpan di | Dipakai oleh | Fungsi |
+|-----|-------------|--------------|--------|
+| `VPS_SSH_KEY` (secret GitHub) | Secret repo `attendapp` | `appleboy/ssh-action` di runner | Masuk SSH ke VPS untuk menjalankan deploy |
+| Deploy key VPS (`~/.ssh/id_attendapp`) | `~/.ssh` di VPS + Deploy keys repo | `git fetch/pull` **di VPS** | Menarik kode repo privat |
 
 ---
 
@@ -1241,6 +1355,8 @@ bash tools/dns-check.sh attd.kovcc.web.id   # kalau domain belum resolve
 | **`nette/schema v1.2.2 requires php >=7.1 <8.2 -> your php version (8.2.35) does not satisfy that requirement`** | lock lama (dependensi transitif `league/config`) dibatasi PHP < 8.2, sedangkan image memakai PHP 8.2 | sudah diperbaiki: `nette/schema` dinaikkan ke v1.4.0 (`php 8.1 - 8.6`), `nette/utils` v4.0.11, `league/config` v1.2.0. Terapkan dengan `git pull` di repo aplikasi lalu `docker compose up -d --build app`. Bila memakai lock sendiri: `composer update nette/schema league/config --with-dependencies` |
 | **`fatal: detected dubious ownership in repository at '/var/www/html'`** | folder aplikasi di-bind-mount dan dimiliki user host, sedangkan proses container berjalan sebagai `root` | sudah diperbaiki: entrypoint menjalankan `git config --global --add safe.directory /var/www/html`. Manual: `docker compose exec app git config --global --add safe.directory /var/www/html` |
 | **`!! Redis belum siap setelah 30 detik` padahal Redis hidup** | pengecekan lama memakai `echo > /dev/tcp/...` yang merupakan fitur **bash**, sedangkan `/bin/sh` di Alpine = BusyBox ash | sudah diperbaiki: entrypoint memakai `php -r` + `fsockopen`. Pastikan juga `REDIS_HOST=redis-shared` & `REDIS_PORT=6379` |
+| **Deploy berhenti di `http://127.0.0.1:8101/login -> 502`, log app terakhir `==> Menunggu Redis siap...`** | Dua kemungkinan: (a) health check menabrak container yang **belum selesai** menjalankan entrypoint (tunggu PostgreSQL + Redis + composer + migrate butuh puluhan detik) — bukan kerusakan; (b) Redis bersama benar-benar tidak terjangkau, biasanya karena container `redis-shared` yang berjalan **tidak menempel di `shared-network`** (container lama dari compose sebelum alias ditambahkan) | (a) workflow `attendapp` versi terbaru menunggu maks 180 detik (`tunggu_siap`); uji manual: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8101/login` (tunggu 30 detik dulu). (b) `docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' redis-shared` → **harus** berisi `shared-network`; kalau tidak: `cd ~/projects/docker-ecosystem/redis-shared-docker && docker compose up -d --force-recreate`. Verifikasi kredensial: `bash tools/why-500.sh` bagian 3 |
+
 | **`RedisException: NOAUTH Authentication required` (muncul di `PhpRedisConnector.php`)** | (a) `REDIS_PASSWORD` aplikasi beda/kosong, sedangkan Redis bersama memakai `requirepass`; ATAU (b) **`bootstrap/cache/config.php` basi** yang masih menyimpan password/host Redis LAMA | samakan `REDIS_PASSWORD` di `app-laravel-docker/.env.docker` dengan `redis-shared-docker/.env.docker`, lalu `docker compose up -d --build --force-recreate app` (entrypoint terbaru otomatis `optimize:clear` lebih dulu). Verifikasi: `bash tools/why-500.sh` bagian 7 |
 | **`config:cache` seolah tidak berpengaruh: `redis.host` tetap `redis` padahal `.env.docker` sudah `redis-shared`** | **`bootstrap/cache/config.php` basi.** Laravel memakai file itu bila ada dan **melewati `.env` seluruhnya** (`LoadConfiguration`: `if (file_exists($cached)) { $items = require $cached; $loadedFromCache = true; }`). File basi bertahan bila `RUN_OPTIMIZE` bukan `true`, bila dibuat di mesin lain lalu folder aplikasi di-copy (`bootstrap/cache/*.php` ada di `.gitignore` aplikasi, jadi `git pull` tidak menghapusnya), atau bila langkah pembuat cache gagal | entrypoint terbaru **selalu** menghapus cache basi saat container start (termasuk `config.php` & `routes-v7.php` dipaksa `rm` bila `optimize:clear` gagal) -> cukup `docker compose up -d --build --force-recreate app`. Deteksi: `bash tools/why-500.sh` bagian 7 membandingkan isi `config.php` dengan environment lalu menuliskan diagnosanya |
 | **`The only supported ciphers are AES-128-CBC and AES-256-CBC with the correct key lengths`** | `APP_KEY` salah panjang. Laravel butuh **tepat 32 byte** (`base64:` + 32 byte) atau 32 karakter mentah; placeholder seperti `SI_SECRET_APIKEY_XXXX` (25 karakter) SELALU gagal dan membuat semua request 500 | buat kunci asli: `docker compose exec app php artisan key:generate --show`, lalu isikan ke `app-laravel-docker/.env.docker`. Bila di VPS `.env.docker` pernah diedit manual, kembalikan versi repo: `git checkout -- app-laravel-docker/.env.docker`. Setelah itu `docker compose up -d --build --force-recreate app` |
