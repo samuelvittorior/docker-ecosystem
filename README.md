@@ -510,28 +510,77 @@ docker logs --tail=50 postgres-db
 
 ---
 
-## ⚙️ GitHub Actions (Auto Deploy)
+## 🚀 Deploy Manual (repo ini TANPA CI/CD)
+
+Repo `docker-ecosystem` **sengaja tidak memakai GitHub Actions**. Perubahan infra
+jarang terjadi, dan satu `git pull` + recreate container di VPS jauh lebih mudah
+diaudit daripada pipeline yang menyentuh server produksi secara otomatis.
+
+```bash
+ssh user@IP_VPS
+cd ~/projects/docker-ecosystem
+git status --short                 # pastikan bersih: tidak ada edit manual yang akan tertimpa
+git pull --ff-only origin main
+```
+
+Lalu recreate **hanya** service yang berubah:
+
+| Yang berubah | Perintah |
+|---|---|
+| `reverse-proxy-docker/**` (termasuk `nginx/default.conf`, `nginx/extra/*.conf`) | `cd reverse-proxy-docker && docker compose up -d --force-recreate` |
+| `app-laravel-docker/{Dockerfile,entrypoint.sh,php/**,nginx/**}` | `cd app-laravel-docker && docker compose up -d --build --force-recreate app laravel-nginx` |
+| `app-laravel-docker/.env.docker` | `cd app-laravel-docker && docker compose up -d --force-recreate app` |
+| `db-postgres-docker/**` | `cd db-postgres-docker && docker compose up -d` |
+| `redis-shared-docker/**` | `cd redis-shared-docker && docker compose up -d --force-recreate` |
+| `tools/*.sh`, `README.md` | tidak perlu recreate (dijalankan manual) |
+
+Tiga jebakan yang membuat "sudah `git pull` tapi tidak ada perubahan":
+
+1. **nginx** hanya membaca ulang konfigurasi saat reload/recreate. File memang
+   bind-mount (isi container langsung ikut berubah), tapi perubahan baru aktif
+   setelah `docker exec <container> nginx -s reload`.
+2. **PHP OPcache**: `opcache.validate_timestamps=0` (lihat
+   `app-laravel-docker/php/opcache.ini`) → file `.php` baru **tidak** dibaca
+   sampai container `app` di-recreate.
+3. **`.env.docker`** dibaca saat container start → wajib recreate container,
+   bukan cukup reload nginx.
+
+Verifikasi setelah deploy:
+
+```bash
+curl -s  https://attd.kovcc.web.id/login | grep -c 'http://attd.kovcc.web.id'   # harus 0
+curl -sI http://IP_VPS:8101/login | head -1                                     # HTTP/1.1 200 OK
+docker ps --format '{{.Names}}\t{{.Status}}'
+```
+
+### CI/CD aplikasi (`attendapp`) — repo terpisah
+
+Yang memakai GitHub Actions hanya **repo aplikasi**; file workflow-nya ada di repo
+aplikasi, bukan di repo ini:
 
 | Repo | File workflow | Fungsi |
 |------|---------------|--------|
-| `docker-ecosystem` | `.github/workflows/deploy-infra.yml` | Validasi compose + deploy infra ke VPS |
-| `attendapp` | `.github/workflows/deploy.yml` | Test (PHPUnit) + deploy aplikasi (rebuild, migrate, cache) |
+| `attendapp` | `.github/workflows/deploy.yml` | Test (lint + PHPUnit) lalu deploy ke VPS (pull, composer, migrate, cache, recreate `app`) |
 
 > ⚠️ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
 > Workflow di subfolder (mis. `app-laravel-docker/.github/...`) tidak akan dijalankan.
 
-### Secrets di GitHub (isi di KEDUA repo)
+### Secrets di repo `attendapp`
 
 Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**:
 
 | Secret | Contoh | Keterangan |
 |--------|--------|------------|
 | `VPS_HOST` | `203.0.113.10` | IP/hostname VPS |
-| `VPS_USER` | `deployer` | user SSH untuk deploy |
-| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----…` | **private key** SSH |
-| `VPS_PORT` | `22` | port SSH |
-| `VPS_INFRA_PATH` | `/home/deployer/projects/docker-ecosystem` | path repo infra di VPS |
-| `VPS_APP_PATH` | `/home/deployer/projects/laravel-test` | path repo app (khusus repo Laravel) |
+| `VPS_USER` | `user` | user SSH; harus bisa menjalankan `docker` (root atau anggota grup `docker`) |
+| `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----…` | **private key** SSH, salin lengkap termasuk baris `BEGIN`/`END` |
+| `VPS_PORT` | `22` | port SSH (opsional; workflow memakai `22` bila secret kosong) |
+| `VPS_INFRA_PATH` | `/home/user/projects/docker-ecosystem` | path repo infra di VPS (tempat `docker compose` aplikasi dijalankan) |
+| `VPS_APP_PATH` | `/home/user/projects/attendapp` | path checkout repo aplikasi di VPS |
+
+> ⚠️ `VPS_APP_PATH` harus **clone dari repo aplikasi yang sama** dengan yang
+> memicu workflow. Kalau di VPS isinya repo/fork lain, `git pull --ff-only` akan
+> ditolak (`diverged`) dan deploy gagal — itu memang pengaman, bukan bug.
 
 ### Membuat SSH key khusus deploy
 
