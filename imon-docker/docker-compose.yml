@@ -1,0 +1,80 @@
+services:
+  # =========================================================================
+  # PHP-FPM (Alpine) - Backend Laravel (ItemMonitoring)
+  #
+  # Pola mengikuti app-laravel-docker (AttendApp):
+  #   - 1 folder ekosistem = 1 docker compose
+  #   - network bersama `shared-network` (external)
+  #   - PostgreSQL BERSAMA (postgres-db), TIDAK ada container DB sendiri
+  #   - TIDAK memakai Redis  -> CACHE_DRIVER=file, SESSION_DRIVER=file
+  #   - optimasi lengkap (OPcache, gzip, cache header, keepalive FPM) sama
+  #     seperti AttendApp
+  #
+  # PERBEDAAN PENTING: nama SERVICE.
+  # Compose SELALU mendaftarkan NAMA SERVICE sebagai alias DNS di network.
+  # Kalau di sini service-nya bernama `app` (seperti AttendApp), akan ada DUA
+  # container yang menjawab nama `app` di `shared-network` -> `fastcgi_pass
+  # app:9000` milik AttendApp bisa mendarat ke PHP-FPM aplikasi ini. Karena itu
+  # dipakai `imon-app` dan `imon-nginx`.
+  # =========================================================================
+  imon-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: imon-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # Container berjalan sebagai ROOT (default); entrypoint memperbaiki
+    # permission storage & bootstrap/cache lalu PHP-FPM menurunkan privilege
+    # worker ke www-data sesuai php/www.conf.
+    env_file:
+      - .env.docker
+    volumes:
+      # Path kode Laravel. Default: repo `ItemMonitoring` sebagai folder SIBLING
+      # dari `docker-ecosystem` (lihat README "Struktur Direktori"):
+      #   ~/projects/docker-ecosystem/imon-docker/  ->  ../../ItemMonitoring
+      # Bila struktur folder berbeda, timpa lewat `imon-docker/.env`:
+      #   LARAVEL_APP_PATH=../ItemMonitoring
+      - ${LARAVEL_APP_PATH:-../../ItemMonitoring}:/var/www/html:delegated
+    networks:
+      shared-network:
+        aliases:
+          - imon-app
+          - imon-fpm
+
+  # =========================================================================
+  # Nginx (Alpine) - Web server Laravel (FastCGI ke PHP-FPM port 9000)
+  # =========================================================================
+  imon-nginx:
+    image: nginx:alpine
+    container_name: imon-nginx
+    restart: unless-stopped
+    volumes:
+      - ${LARAVEL_APP_PATH:-../../ItemMonitoring}:/var/www/html:delegated
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - imon-app
+    networks:
+      shared-network:
+        aliases:
+          # Dipakai `proxy_pass` di reverse-proxy-docker/nginx/default.conf
+          # (blok `listen 8082`):  proxy_pass http://imon-nginx:80
+          - imon-nginx
+
+# =============================================================================
+# PETA NAMA DI `shared-network` (dengan 4 aplikasi, ini WAJIB eksplisit)
+#
+#   AttendApp      : app, attendapp-app, app-fpm, attendapp-nginx, laravel-nginx
+#                    (milik app-laravel-docker -- JANGAN diubah dari sini)
+#   ITHelper       : ithelper-app, ithelper-fpm, ithelper-nginx
+#   ItemMonitoring : imon-app, imon-fpm, imon-nginx
+#
+# Verifikasi di VPS (tidak boleh ada nama yang muncul dua kali):
+#   docker network inspect shared-network \
+#     -f '{{range .Containers}}{{.Name}} {{end}}'
+# =============================================================================
+
+networks:
+  shared-network:
+    external: true
+    name: shared-network

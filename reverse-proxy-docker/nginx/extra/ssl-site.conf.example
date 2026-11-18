@@ -1,10 +1,15 @@
 # =============================================================================
-# HTTPS + HTTP/2 untuk satu domain/subdomain (TEMPLATE)
+# HTTPS + HTTP/2 untuk SATU domain/subdomain (TEMPLATE)
 #
 # File ini TIDAK dimuat nginx (hanya *.conf di folder ini yang dimuat).
 # Jangan dipakai manual: jalankan skrip yang mengisinya otomatis:
 #
 #     sudo bash tools/enable-https.sh attd.kovcc.web.id email@gmail.com
+#
+# Satu template untuk SEMUA aplikasi (AttendApp, ITHelper, ItemMonitoring):
+# yang membedakan hanya `--upstream`, mis.
+#     sudo bash tools/enable-https.sh desk.kovcc.web.id mail@gmail.com \
+#          --upstream ithelper-nginx:80
 #
 # Skrip tersebut:
 #   1. meminta sertifikat Let's Encrypt lewat webroot di port 80
@@ -30,14 +35,16 @@
 # PEMBAGIAN PORT (penting):
 #   port 80   -> HANYA verifikasi sertifikat. Halaman default nginx tetap
 #                yang tampil (lihat reverse-proxy-docker/nginx/default.conf).
-#   port 8101 -> aplikasi lewat HTTP  (http://IP_VPS:8101, http://domain:8101).
-#                Blok 8101 ada di default.conf, bukan di sini.
+#   port HTTP -> aplikasi tanpa domain, satu port per aplikasi:
+#                  8101 AttendApp | 8102 ITHelper | 8103 ItemMonitoring
+#                Blok `listen 808x` ada di default.conf, BUKAN di sini.
 #   port 443  -> aplikasi lewat HTTPS (https://domain) + HTTP/2.
 #
-# Satu port hanya bisa satu protokol. Karena 8101 sudah dipakai HTTP (8080 di
-# container), HTTPS untuk 8101 tidak dibuat di sini. Bila Anda lebih suka
-# https://domain:8101, ubah docker-compose.yml menjadi "${APP_HTTPS_PORT:-8101}:8101"
-# dan tambahkan blok `listen 8101 ssl;` (salin pola blok 443 di bawah).
+# Satu port hanya bisa satu protokol. Karena port HTTP sudah dipakai di
+# container (8080/8081/8082), HTTPS TIDAK dibuat di port itu. Bila Anda lebih
+# suka https://domain:8102, ubah docker-compose.yml menjadi
+# "${ITHELPER_HTTPS_PORT:-8102}:8102" dan tambahkan blok `listen 8102 ssl;`
+# (salin pola blok 443 di bawah).
 # =============================================================================
 
 # -----------------------------------------------------------------------------

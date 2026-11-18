@@ -85,7 +85,12 @@ PROXY_DIR="$ROOT_DIR/reverse-proxy-docker"
 CERT_DIR="$PROXY_DIR/nginx/certs"
 EXTRA_DIR="$PROXY_DIR/nginx/extra"
 WEBROOT="$PROXY_DIR/nginx/certbot"
-TEMPLATE="$EXTRA_DIR/attendapp-ssl.conf.example"
+TEMPLATE="$EXTRA_DIR/ssl-site.conf.example"
+# Nama lama (sebelum template digeneralisasi) tetap didukung bila masih ada
+# di checkout VPS yang belum `git pull`.
+if [ ! -f "$TEMPLATE" ] && [ -f "$EXTRA_DIR/attendapp-ssl.conf.example" ]; then
+    TEMPLATE="$EXTRA_DIR/attendapp-ssl.conf.example"
+fi
 
 # Nama file & nama sertifikat mengikuti domain -> menambah subdomain/domain
 # (atau aplikasi) lain tidak saling menimpa: tiap domain punya file sendiri.
@@ -302,11 +307,19 @@ Jalur akses:
   port internal ($UPSTREAM_PORT) TIDAK perlu dibuka di firewall; trafik masuk
   lewat 443 lalu diteruskan nginx ke upstream di jaringan Docker.
 
-Bila ini aplikasi Laravel (AttendApp), sesuaikan juga:
-  attendapp/.env  dan  app-laravel-docker/.env.docker
+Bila ini aplikasi Laravel, sesuaikan juga APP_URL di:
+  <aplikasi>/.env  dan  <folder-app-docker>/.env.docker
     APP_URL=https://$DOMAIN
-    APP_FORCE_HTTPS=false   <-- WAJIB false agar akses lewat IP/HTTP tidak rusak
-  lalu: cd app-laravel-docker && docker compose up -d --force-recreate app
+  lalu: cd <folder-app-docker> && docker compose up -d --force-recreate <service-app>
+
+Contoh per aplikasi di ekosistem ini:
+  AttendApp       : app-laravel-docker/,  port 8101, APP_URL=https://attd.kovcc.web.id
+  ITHelper        : ithelper-docker/,     port 8102, APP_URL=https://desk.kovcc.web.id
+  ItemMonitoring  : imon-docker/,         port 8103, APP_URL=https://imon.kovcc.web.id
+
+JANGAN memaksa skema https di kode aplikasi (URL::forceScheme). Jalur
+http://IP_VPS:<port> akan ikut rusak. Skema dideteksi dari header
+X-Forwarded-Proto; lihat App\Http\Middleware\TrustProxies ($proxies = '*').
 
 Perpanjangan otomatis (sertifikat berlaku 90 hari):
   sudo bash tools/renew-https.sh      # uji manual dulu

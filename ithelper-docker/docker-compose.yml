@@ -1,0 +1,89 @@
+services:
+  # =========================================================================
+  # PHP-FPM (Alpine) - Backend Laravel (ITHelper)
+  #
+  # Pola mengikuti app-laravel-docker (AttendApp):
+  #   - 1 folder ekosistem = 1 docker compose
+  #   - network bersama `shared-network` (external)
+  #   - PostgreSQL BERSAMA (postgres-db), TIDAK ada container DB sendiri
+  #   - TIDAK memakai Redis  -> CACHE_DRIVER=file, SESSION_DRIVER=file
+  #   - optimasi lengkap (OPcache, gzip, cache header, keepalive FPM) sama
+  #     seperti AttendApp
+  #
+  # PERBEDAAN PENTING dari app-laravel-docker: nama SERVICE.
+  # Di AttendApp nama service-nya `app` dan `laravel-nginx`. Di sini nama
+  # service-nya `ithelper-app` dan `ithelper-nginx`.
+  #
+  # Alasannya bukan gaya-gayaan: Compose SELALU mendaftarkan NAMA SERVICE
+  # sebagai alias DNS di network yang dipakai. Jadi kalau di sini service-nya
+  # juga bernama `app`, akan ada DUA container yang menjawab nama `app` di
+  # `shared-network` (AttendApp punya alias `app` untuk fastcgi_pass).
+  # Resolve-nya jadi tidak deterministik: PHP-FPM AttendApp bisa menerima
+  # request PHP milik ITHelper (dan sebaliknya) -> 502/504 atau halaman
+  # aplikasi yang salah, muncul-hilang sehingga sangat sulit dilacak.
+  # =========================================================================
+  ithelper-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ithelper-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # Container dijalankan sebagai ROOT (default). Entrypoint memperbaiki
+    # permission storage & bootstrap/cache (chown ke www-data), lalu PHP-FPM
+    # menurunkan privilege worker ke www-data sesuai php/www.conf.
+    env_file:
+      - .env.docker
+    volumes:
+      # Path kode Laravel. Default: repo `ITHelper` sebagai folder SIBLING dari
+      # `docker-ecosystem` (lihat README "Struktur Direktori"):
+      #   ~/projects/docker-ecosystem/ithelper-docker/  ->  ../../ITHelper
+      #   ~/projects/ITHelper/
+      # Bila struktur folder berbeda, timpa lewat `ithelper-docker/.env`:
+      #   LARAVEL_APP_PATH=../ITHelper
+      - ${LARAVEL_APP_PATH:-../../ITHelper}:/var/www/html:delegated
+    # Tidak ada `depends_on`: PostgreSQL milik compose terpisah
+    # (db-postgres-docker). Entrypoint menunggu PostgreSQL siap sebelum migrate.
+    networks:
+      shared-network:
+        aliases:
+          - ithelper-app
+          - ithelper-fpm
+
+  # =========================================================================
+  # Nginx (Alpine) - Web server Laravel (FastCGI ke PHP-FPM port 9000)
+  # =========================================================================
+  ithelper-nginx:
+    image: nginx:alpine
+    container_name: ithelper-nginx
+    restart: unless-stopped
+    volumes:
+      - ${LARAVEL_APP_PATH:-../../ITHelper}:/var/www/html:delegated
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - ithelper-app
+    networks:
+      shared-network:
+        aliases:
+          # Satu-satunya nama yang dipakai `proxy_pass` di
+          # reverse-proxy-docker/nginx/default.conf (blok `listen 8081`):
+          #   proxy_pass http://ithelper-nginx:80
+          - ithelper-nginx
+
+# =============================================================================
+# PETA NAMA DI `shared-network` (dengan 4 aplikasi, ini WAJIB eksplisit)
+#
+#   AttendApp      : app, attendapp-app, app-fpm, attendapp-nginx, laravel-nginx
+#                    (milik app-laravel-docker -- JANGAN diubah dari sini)
+#   ITHelper       : ithelper-app, ithelper-fpm, ithelper-nginx
+#   ItemMonitoring : imon-app, imon-fpm, imon-nginx
+#
+# Verifikasi di VPS (tidak boleh ada nama yang muncul dua kali):
+#   docker network inspect shared-network \
+#     -f '{{range .Containers}}{{.Name}} {{end}}'
+# =============================================================================
+
+networks:
+  shared-network:
+    external: true
+    name: shared-network

@@ -12,29 +12,34 @@ ke banyak aplikasi Laravel.
 
 ## 🏗️ Arsitektur
 
+Ekosistem ini melayani **empat aplikasi** dari satu VPS, satu IP publik, satu
+PostgreSQL, dan satu reverse proxy. Tiap aplikasi punya folder Docker sendiri.
+
 ```
                             Internet
                                 |
                                 v
-              +----------------------------------+
-              |  reverse-proxy (nginx:alpine)    |  port 80 / 443 / 8101
-              |  app.attendapp.com               |
-              +----------------+-----------------+
-                               |  proxy_pass attendapp-nginx:80
-                               v
-              +----------------------------------+
-              | attendapp-nginx (nginx:alpine)   |  listen 80
-              | root: /var/www/html/public       |
-              +----------------+-----------------+
-                               |  fastcgi_pass app:9000
-                               v
-              +----------------------------------+
-              | attendapp-app (php:8.2-fpm)      |
-              | /var/www/html <- $LARAVEL_APP_PATH|
-              +----+------------------------+----+
+              +------------------------------------------+
+              |  reverse-proxy (nginx:alpine)             |  80 / 443
+              |  attd.kovcc.web.id  -> 8080 -> attendapp  |  8101 attendapp
+              |  desk.kovcc.web.id  -> 8081 -> ithelper   |  8102 ithelper
+              |  imon.kovcc.web.id  -> 8082 -> imon       |  8103 imon
+              +------------------+-----------------------+
+                                 |  proxy_pass <app>-nginx:80
+                                 v
+              +------------------------------------------+
+              | <app>-nginx (nginx:alpine)  listen 80     |
+              | root: /var/www/html/public                |
+              +------------------+-----------------------+
+                                 |  fastcgi_pass <app>-app:9000
+                                 v
+              +------------------------------------------+
+              | <app>-app (php-fpm)                       |
+              | /var/www/html <- $LARAVEL_APP_PATH        |
+              +----+------------------------+------------+
                    |                        |
                    | DB_HOST=postgres-db    | REDIS_HOST=redis-shared
-                   v                        v
+                   v                        v           (HANYA AttendApp)
         +--------------------+   +--------------------+
         | postgres-db        |   | redis-shared       |
         | postgres:15-alpine |   | redis:alpine       |
@@ -44,25 +49,41 @@ ke banyak aplikasi Laravel.
         SEMUA container di atas berada di SATU network: shared-network
 ```
 
-**Redis bersama:** Redis tidak lagi di dalam `app-laravel-docker`, melainkan
-berdiri sendiri di `redis-shared-docker/` dan dipakai bersama beberapa aplikasi
-lewat `shared-network` dengan nama `redis-shared`.
+**Daftar aplikasi (status akhir):**
+
+| Aplikasi | Folder Docker | Container | Port HTTP | Domain (HTTPS) | Redis |
+|---|---|---|---|---|---|
+| AttendApp | `app-laravel-docker/` | `attendapp-app`, `attendapp-nginx` | **8101** | `attd.kovcc.web.id` | ✅ pakai |
+| ITHelper | `ithelper-docker/` | `ithelper-app`, `ithelper-nginx` | **8102** | `desk.kovcc.web.id` | ❌ tidak |
+| ItemMonitoring | `imon-docker/` | `imon-app`, `imon-nginx` | **8103** | `imon.kovcc.web.id` | ❌ tidak |
+
+**Redis bersama:** Redis hanya dipakai AttendApp. ITHelper & ItemMonitoring
+memakai `CACHE_DRIVER=file` + `SESSION_DRIVER=file` (disimpan di
+`storage/framework/`, yang di-bind-mount sehingga tetap ada setelah recreate).
 
 > **CATATAN Penting - Beda dengan PostgreSQL:** Redis **tidak** punya isolasi per-user seperti
-> PostgreSQL. Setiap aplikasi **wajib** memakai nomor `REDIS_DB` /
-> `REDIS_CACHE_DB` yang berbeda, kalau tidak `php artisan cache:clear` di satu
-> aplikasi bisa menghapus cache aplikasi lain. Tabel alokasi nomor DB ada di
+> PostgreSQL. Setiap aplikasi yang memakai Redis **wajib** memakai nomor
+> `REDIS_DB` / `REDIS_CACHE_DB` yang berbeda, kalau tidak
+> `php artisan cache:clear` di satu aplikasi bisa menghapus cache aplikasi lain.
+> Tabel alokasi nomor DB ada di
 > [redis-shared-docker/README.md](redis-shared-docker/README.md).
 
 **Peran tiap folder:**
 
 | Folder | Isi | Port |
 |--------|-----|------|
-| `app-laravel-docker/` | PHP-FPM (Laravel) + Nginx internal | internal (9000, 80) |
-| `redis-shared-docker/` | Redis BERSAMA untuk cache + session beberapa aplikasi | tidak diekspos |
-| `db-postgres-docker/` | PostgreSQL 15 (dibuat pertama, membuat `shared-network`) | tidak diekspos |
-| `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443, **8101** (akses langsung tanpa domain) |
-| `tools/` | Skrip bantu operasional (`diagnose.sh`, `reset-stack.sh`) | - |
+| `app-laravel-docker/` | PHP-FPM + Nginx internal — AttendApp | internal (9000, 80) |
+| `ithelper-docker/` | PHP-FPM + Nginx internal — ITHelper | internal (9000, 80) |
+| `imon-docker/` | PHP-FPM + Nginx internal — ItemMonitoring | internal (9000, 80) |
+| `redis-shared-docker/` | Redis BERSAMA (dipakai AttendApp) | tidak diekspos |
+| `db-postgres-docker/` | PostgreSQL 15 bersama semua aplikasi (membuat `shared-network`) | tidak diekspos |
+| `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443, **8101/8102/8103** |
+| `tools/` | Skrip bantu operasional (`app-health.sh`, `enable-https.sh`, dll) | - |
+
+> **Satu folder = satu ekosistem = satu `docker compose`.** Jangan menggabungkan
+> dua aplikasi dalam satu compose: `container_name` dan alias network harus unik,
+> dan riwayat deploy tiap aplikasi dikelola repo masing-masing.
+
 
 ---
 
@@ -74,25 +95,37 @@ path relatif `${LARAVEL_APP_PATH:-../../attendapp}` (dihitung dari folder
 
 ```
 home/user/projects/
-├── docker-ecosystem/          ← repo ini
-│   ├── app-laravel-docker/
+├── docker-ecosystem/            ← repo ini
+│   ├── app-laravel-docker/      ← AttendApp
+│   ├── ithelper-docker/         ← ITHelper
+│   ├── imon-docker/             ← ItemMonitoring
 │   ├── db-postgres-docker/
+│   ├── redis-shared-docker/
 │   └── reverse-proxy-docker/
-└── laravel-test/              ← repo aplikasi Laravel
-    ├── app/  routes/  public/ ...
-    └── vendor/
+├── attendapp/                   ← repo aplikasi AttendApp
+├── ITHelper/                    ← repo aplikasi ITHelper
+└── ItemMonitoring/              ← repo aplikasi ItemMonitoring
 ```
+
+Path default tiap folder Docker (bisa ditimpa lewat `.env` di folder tersebut):
+
+| Folder | Default `LARAVEL_APP_PATH` |
+|---|---|
+| `app-laravel-docker/` | `../../attendapp` |
+| `ithelper-docker/` | `../../ITHelper` |
+| `imon-docker/` | `../../ItemMonitoring` |
 
 > ⚠️ Jika struktur ini tidak dipenuhi, Docker akan membuat folder kosong dan
 > container akan gagal dengan `Composer could not find a composer.json file`.
 >
-> Bila Anda memakai struktur lain (mis. `attendapp/` di **dalam**
-> `docker-ecosystem/`), timpa path-nya lewat file `app-laravel-docker/.env`:
+> Bila Anda memakai struktur lain (mis. aplikasi di **dalam**
+> `docker-ecosystem/`), timpa path-nya lewat file `.env` di folder Docker
+> aplikasi tersebut:
 >
 > ```bash
-> cd ~/projects/docker-ecosystem/app-laravel-docker
-> echo 'LARAVEL_APP_PATH=../attendapp' > .env
-> docker compose up -d --force-recreate app laravel-nginx
+> cd ~/projects/docker-ecosystem/ithelper-docker
+> echo 'LARAVEL_APP_PATH=../ITHelper' > .env
+> docker compose up -d --force-recreate
 > ```
 
 ---
@@ -740,9 +773,19 @@ Satu port hanya bisa melayani **satu protokol**, jadi pembagiannya dibuat ekspli
 |---|---|---|---|
 | **80** | HTTP | **Halaman default nginx** + verifikasi Let's Encrypt. **Bukan** aplikasi. | `http://IP_VPS` |
 | **8101** | HTTP | Aplikasi AttendApp (jalur lama, tetap dipakai) | `http://IP_VPS:8101`, `http://attd.kovcc.web.id:8101` |
-| **443** | HTTPS | Aplikasi AttendApp + HTTP/2 + HSTS | `https://attd.kovcc.web.id` |
+| **8102** | HTTP | Aplikasi ITHelper | `http://IP_VPS:8102`, `http://desk.kovcc.web.id:8102` |
+| **8103** | HTTP | Aplikasi ItemMonitoring | `http://IP_VPS:8103`, `http://imon.kovcc.web.id:8103` |
+| **443** | HTTPS | Ketiga aplikasi (dipilih lewat SNI/`server_name`) + HTTP/2 + HSTS | `https://attd.kovcc.web.id`, `https://desk.kovcc.web.id`, `https://imon.kovcc.web.id` |
 
-Semua bisa dipakai **bersamaan**; tidak perlu memilih.
+Semua bisa dipakai **bersamaan**; tidak perlu memilih. Satu IP publik + satu
+port 443 melayani banyak subdomain karena nginx memilih blok `server` dari nama
+yang dikirim browser (SNI). Pemetaan port di dalam container:
+
+| Port host | Port container reverse-proxy | Blok `listen` | Diteruskan ke |
+|---|---|---|---|
+| 8101 | 8080 | `listen 8080;` | `attendapp-nginx:80` |
+| 8102 | 8081 | `listen 8081;` | `ithelper-nginx:80` |
+| 8103 | 8082 | `listen 8082;` | `imon-nginx:80` |
 
 > **Kenapa port 80 tidak untuk aplikasi?** Sesuai permintaan: port 80 disisakan
 > sebagai halaman default nginx. Tapi endpoint verifikasi sertifikat
@@ -750,9 +793,10 @@ Semua bisa dipakai **bersamaan**; tidak perlu memilih.
 > Let's Encrypt selalu memverifikasi lewat port 80. Tanpa itu penerbitan dan
 > perpanjangan otomatis sertifikat akan gagal.
 
-> **Kenapa HTTPS tidak di 8101?** Karena 8101 sudah dipakai HTTP. Kalau Anda
-> lebih suka `https://attd.kovcc.web.id:8101` daripada port 443, lihat catatan
-> di `nginx/extra/attendapp-ssl.conf.example` (perlu mengubah mapping compose).
+> **Kenapa HTTPS tidak di 8101/8102/8103?** Karena port itu sudah dipakai HTTP.
+> Kalau Anda lebih suka `https://desk.kovcc.web.id:8102` daripada port 443,
+> lihat catatan di `reverse-proxy-docker/nginx/extra/ssl-site.conf.example`
+> (perlu mengubah mapping compose).
 
 > Satu hal yang **tidak** bisa: login di domain lalu tetap login saat membuka
 > IP:8101. Cookie session terikat ke host, jadi keduanya punya session sendiri.
@@ -880,6 +924,36 @@ sudo bash tools/enable-https.sh attd.kovcc.web.id email-anda@gmail.com
 
 Ganti `email-anda@gmail.com` dengan email Anda (dipakai Let's Encrypt untuk
 notifikasi sertifikat hampir kedaluwarsa).
+
+**Untuk dua aplikasi lain** (satu template, beda `--upstream`):
+
+```bash
+cd ~/projects/docker-ecosystem
+
+# ITHelper -> https://desk.kovcc.web.id
+sudo bash tools/enable-https.sh desk.kovcc.web.id email-anda@gmail.com \
+     --upstream ithelper-nginx:80
+
+# ItemMonitoring -> https://imon.kovcc.web.id
+sudo bash tools/enable-https.sh imon.kovcc.web.id email-anda@gmail.com \
+     --upstream imon-nginx:80
+```
+
+Tiap kali dijalankan, skrip membuat **satu** file
+`reverse-proxy-docker/nginx/extra/<domain>.conf` dan menambahkan redirect
+http→https untuk domain itu saja. Domain lain tidak tersentuh, dan
+`http://IP:8101`, `:8102`, `:8103` tetap jalan.
+
+> ⚠️ **Prasyarat DNS.** A record `desk.kovcc.web.id` dan `imon.kovcc.web.id`
+> harus sudah menunjuk ke IP VPS sebelum perintah di atas dijalankan. Cek dulu:
+>
+> ```bash
+> bash tools/dns-check.sh desk.kovcc.web.id
+> bash tools/dns-check.sh imon.kovcc.web.id
+> ```
+>
+> Selama DNS belum ada, aplikasi tetap bisa dipakai lewat
+> `http://IP_VPS:8102` dan `http://IP_VPS:8103`.
 
 **Yang dilakukan skrip, berurutan:**
 
@@ -1185,17 +1259,186 @@ ketergantungan ke pihak ketiga).
 ---
 
 
+## 🧩 Menambah Aplikasi Kedua & Ketiga (ITHelper + ItemMonitoring)
+
+Kedua aplikasi memakai **PostgreSQL yang sama** dengan AttendApp, tetapi
+**database dan role terpisah**. Redis tidak dipakai.
+
+| | ITHelper | ItemMonitoring |
+|---|---|---|
+| Folder Docker | `ithelper-docker/` | `imon-docker/` |
+| Repo aplikasi | `../ITHelper` | `../ItemMonitoring` |
+| Container | `ithelper-app`, `ithelper-nginx` | `imon-app`, `imon-nginx` |
+| PHP | 8.1 (`laravel/framework` v8.83) | 8.2 (`laravel/framework` v10.50) |
+| Database | `ithelper` | `item_monitoring` |
+| Role DB | `ithelper` | `imon` |
+| Cache / Session | `file` | `file` |
+| Port HTTP | 8102 | 8103 |
+| Domain HTTPS | `desk.kovcc.web.id` | `imon.kovcc.web.id` |
+
+> **Satu versi PHP per aplikasi.** Jangan memaksa semua aplikasi memakai satu
+> image PHP yang sama: `composer.lock` tiap aplikasi mengunci versi framework
+> yang berbeda. Mencampur (mis. Laravel 8 di PHP 8.2) memunculkan deprecation
+> dan, untuk beberapa paket, gagal install sama sekali.
+
+### 1) Buat database & role (SEKALI, manual)
+
+File SQL-nya **tidak** dijalankan otomatis pada volume PostgreSQL yang sudah ada
+(entrypoint `initdb` hanya jalan saat volume masih kosong). Jalankan manual:
+
+```bash
+cd ~/projects/docker-ecosystem
+docker exec -i postgres-db psql -U postgres -v ON_ERROR_STOP=1 \
+  < db-postgres-docker/postgres/conf.d/20-app-databases.sql
+```
+
+Isi file tersebut (idempoten — aman dijalankan berulang):
+
+- role `ithelper` + password, database `ithelper`, owner + grant
+- role `imon` + password, database `item_monitoring`, owner + grant
+- **tidak** memberikan superuser: tiap aplikasi hanya bisa menyentuh DB-nya sendiri
+
+Verifikasi:
+
+```bash
+docker exec -it postgres-db psql -U postgres -c '\l' | grep -E 'ithelper|item_monitoring'
+docker exec -it postgres-db psql -U postgres -c '\du' | grep -E 'ithelper|imon'
+```
+
+> ⚠️ **Password harus sama di dua tempat.** `DB_PASSWORD` di
+> `<folder>-docker/.env.docker` harus identik dengan `CREATE ROLE ... PASSWORD`
+> di file SQL. Kalau tidak: `password authentication failed for user "..."`.
+
+### 2) Nyalakan kedua ekosistem
+
+```bash
+cd ~/projects/docker-ecosystem/ithelper-docker && docker compose up -d --build
+cd ../imon-docker && docker compose up -d --build
+
+# entrypoint butuh 10-60 detik (tunggu PG, composer install, migrate, cache)
+sleep 30
+curl -s -o /dev/null -w 'ithelper: %{http_code}\n' http://127.0.0.1:8102/login
+curl -s -o /dev/null -w 'imon     : %{http_code}\n' http://127.0.0.1:8103/login
+```
+
+Keduanya harus `200`. Kalau `502`: `docker compose logs --tail 60 <container-app>`.
+
+### 3) Cek kesehatan ketiga aplikasi sekaligus
+
+```bash
+cd ~/projects/docker-ecosystem
+bash tools/app-health.sh
+```
+
+Skrip ini (hanya baca) menampilkan: container yang jalan, **alias DNS di
+`shared-network`**, kode HTTP tiap port, status domain + masa berlaku
+sertifikat, dan tes koneksi database dari dalam tiap container.
+
+
+### 4) Deploy otomatis (GitHub Actions)
+
+Tiap repo aplikasi punya workflow sendiri: `.github/workflows/deploy.yml`.
+
+| Repo | Workflow | Concurrency group | Health check |
+|---|---|---|---|
+| `attendapp` | `Deploy App - AttendApp` | `deploy-attendapp` | `:8101/login` |
+| `ITHelper` | `Deploy App - ITHelper` | `deploy-ithelper` | `:8102/login` |
+| `ItemMonitoring` | `Deploy App - ItemMonitoring` | `deploy-imon` | `:8103/login` |
+
+Secrets yang dipakai (nama sama di ketiga repo):
+
+| Secret | Isi |
+|---|---|
+| `VPS_HOST` | IP atau hostname VPS |
+| `VPS_USER` | user SSH (anggota grup `docker`) |
+| `VPS_SSH_KEY` | private key deploy khusus repo tersebut |
+| `VPS_PORT` | (opsional) default 22 |
+| `VPS_APP_PATH` | path repo aplikasi di VPS, mis. `/home/user/projects/ITHelper` |
+| `VPS_INFRA_PATH` | path repo infra, mis. `/home/user/projects/docker-ecosystem` |
+
+> **Satu deploy key per repo.** Jangan memakai satu key untuk tiga repo: kalau
+> satu key bocor, semua server/repo bisa diakses. Pasang public key-nya di
+> `~/.ssh/authorized_keys` VPS, dan simpan private key sebagai secret
+> `VPS_SSH_KEY` **hanya di repo yang bersangkutan**.
+
+### 5) Bahaya terbesar: nama container/alias yang bertabrakan
+
+Compose otomatis mendaftarkan **nama service** sebagai alias DNS di network.
+AttendApp sudah memakai `app` dan `laravel-nginx`. Kalau aplikasi baru memakai
+nama yang sama:
+
+- `fastcgi_pass app:9000` milik AttendApp bisa mendarat ke PHP-FPM aplikasi lain
+- `proxy_pass laravel-nginx:80` bisa membuka halaman aplikasi yang salah
+- Gejalanya menipu: kadang 200, kadang 502/504, kadang halaman tertukar
+
+Karena itu nama yang dipakai bersifat unik per aplikasi:
+
+| Aplikasi | Nama service/container | Alias tambahan |
+|---|---|---|
+| AttendApp | `app`, `laravel-nginx` | `attendapp-app`, `app-fpm`, `attendapp-nginx`, `attendapp-fpm` |
+| ITHelper | `ithelper-app`, `ithelper-nginx` | `ithelper-fpm` |
+| ItemMonitoring | `imon-app`, `imon-nginx` | `imon-fpm` |
+
+Cek kapan saja:
+
+```bash
+docker network inspect shared-network -f '{{range .Containers}}{{.Names}} {{end}}'
+```
+
+### 6) Migrasi khusus MySQL pada ITHelper (WAJIB dibaca)
+
+Repo ITHelper asli berisi migrasi yang memakai sintaks MySQL:
+
+```php
+DB::statement('ALTER TABLE laporans MODIFY nama_lingkungan VARCHAR(255) NULL');
+```
+
+Di PostgreSQL ini gagal (`SQLSTATE[42601]: Syntax error at or near "MODIFY"`),
+sehingga `php artisan migrate` berhenti di tengah jalan dan tabel sesudahnya
+tidak pernah dibuat.
+
+Perbaikan yang sudah disiapkan (salin ke repo ITHelper):
+
+```
+ITHelper/database/migrations/2026_05_29_000002_make_laporan_optional_fields_nullable.php
+```
+
+Versi baru memilih perintah sesuai driver:
+
+| Driver | Perintah |
+|---|---|
+| `pgsql` | `ALTER TABLE laporans ALTER COLUMN <kolom> DROP NOT NULL` |
+| `mysql` | `ALTER TABLE laporans MODIFY <kolom> VARCHAR(255) NULL` |
+| `sqlite` | dilewati (test in-memory) |
+
+Perilaku di MySQL **tidak berubah**, jadi aman untuk mesin developer.
+
+Cari sisa SQL khusus MySQL lainnya:
+
+```bash
+cd ~/projects/ITHelper
+grep -rn "DB::statement\|->after(" database/migrations \
+  | grep -Ei "modify|engine=|fulltext|after\(" || echo "tidak ada"
+```
+
+> `->after()` aman: modifier itu **diabaikan** oleh grammar PostgreSQL
+> (hanya dipakai MySQL), jadi tidak menyebabkan error.
+
+---
+
+
 ## âš¡ Optimasi Performa (gzip, HTTP/2, HTTPS, cache)
 
 Halaman Laravel ini memuat **ratusan file JS/CSS (>14 MB mentah)**. Yang membuatnya
 terasa cepat di shared hosting biasanya bukan PHP-nya, melainkan 4 hal di bawah ini â€”
+
 dan semuanya sudah disiapkan di repo ini:
 
 | # | Hal | Status di repo | Dampak |
 |---|---|---|---|
 | 1 | **Kompresi gzip** | aktif di `app-laravel-docker/nginx/default.conf` **dan** `reverse-proxy-docker/nginx/default.conf` | JS/CSS/HTML mengecil 65â€“80% |
 | 2 | **Cache aset 30 hari** | `Cache-Control: public, max-age=2592000, immutable` | kunjungan berikutnya tidak mengunduh ulang |
-| 3 | **HTTPS + HTTP/2** | template `nginx/extra/attendapp-ssl.conf.example` + `tools/enable-https.sh` | aset diunduh paralel (multiplexing), bukan berderet |
+| 3 | **HTTPS + HTTP/2** | template `nginx/extra/ssl-site.conf.example` + `tools/enable-https.sh` | aset diunduh paralel (multiplexing), bukan berderet |
 | 4 | **Cache produksi Laravel** | `RUN_OPTIMIZE=true` di `.env.docker` (config/route/view cache) | config & Blade tidak di-parse ulang tiap request |
 
 > **Catatan penting:** direktif `no-transform` pada header `Cache-Control` aset
@@ -1315,11 +1558,12 @@ Cara membaca hasilnya:
 
 ## 🛠 Tools Bantu (opsional)
 
-Lima skrip di `tools/` untuk mempermudah operasional di VPS:
+Enam skrip di `tools/` untuk mempermudah operasional di VPS:
 
 | Skrip | Fungsi |
 |---|---|
-| `tools/diagnose.sh` | **Read-only.** 16 pemeriksaan: status container, port, anggota `shared-network`, config nginx yang benar-benar dimuat (`nginx -T`), tes DNS & HTTP berlapis, cek PHP-FPM, tail log. Jalankan saat ada 502. |
+| `tools/app-health.sh` | **Read-only, untuk SEMUA aplikasi.** Status container, **alias DNS di `shared-network`** (deteksi nama bertabrakan), kode HTTP di 8101/8102/8103, status domain + masa berlaku sertifikat, dan tes koneksi database dari dalam tiap container. Mulai dari sini kalau ada yang aneh. |
+| `tools/diagnose.sh` | **Read-only.** 16 pemeriksaan: status container, port, anggota `shared-network`, config nginx yang benar-benar dimuat (`nginx -T`), tes DNS & HTTP berlapis, cek PHP-FPM, tail log. Jalankan saat ada 502 (khusus AttendApp). |
 | `tools/reset-stack.sh` | Membersihkan container sisa bernama lama, recreate reverse proxy, build & jalankan stack aplikasi, lalu verifikasi DNS + HTTP. **Tidak** menghapus volume data. |
 | `tools/perf-check.sh` | **Read-only.** Cek penyebab lambat dengan angka: RAM/swap, `docker stats`, apakah gzip aktif, **TTFB dari dalam VPS**, cache config/route/view, OPcache, setelan PostgreSQL, memori Redis. |
 | `tools/enable-https.sh` | Mengaktifkan **HTTPS + HTTP/2** (Let's Encrypt, mode webroot tanpa downtime): cek DNS + preflight ACME, cek upstream, minta sertifikat, salin ke `nginx/certs/`, tulis `nginx/extra/<nama>.conf`, validasi config di container sekali-pakai, recreate proxy, lalu uji. Idempoten. Opsi `--upstream host:port` untuk **aplikasi lain** (mis. `--upstream app2-nginx:80`) dan `--name` untuk satu domain dengan >1 aplikasi. |
@@ -1328,12 +1572,17 @@ Lima skrip di `tools/` untuk mempermudah operasional di VPS:
 
 ```bash
 cd ~/projects/docker-ecosystem
-bash tools/diagnose.sh      # kalau ada masalah (502, 404, dll)
+bash tools/app-health.sh    # SEMUA aplikasi: container, port, DNS, DB, SSL
+bash tools/diagnose.sh      # kalau ada masalah (502, 404, dll) - AttendApp
 bash tools/perf-check.sh    # kalau terasa lambat
 bash tools/reset-stack.sh   # kalau perlu bersih-bersih & jalan ulang
 sudo bash tools/enable-https.sh attd.kovcc.web.id email@gmail.com   # aktifkan HTTPS
 sudo bash tools/renew-https.sh            # perpanjang (cron harian)
 bash tools/dns-check.sh attd.kovcc.web.id   # kalau domain belum resolve
+
+# Aplikasi lain: hanya beda --upstream
+sudo bash tools/enable-https.sh desk.kovcc.web.id email@gmail.com --upstream ithelper-nginx:80
+sudo bash tools/enable-https.sh imon.kovcc.web.id email@gmail.com --upstream imon-nginx:80
 
 > **Penting — nama service ≠ nama DNS.** Nama yang bisa di-resolve antar
 > container hanyalah **nama service Compose** atau **`aliases`** pada network,
@@ -1351,6 +1600,12 @@ bash tools/dns-check.sh attd.kovcc.web.id   # kalau domain belum resolve
 |--------|-------|--------|
 | `network shared-network not found` | network belum dibuat | `docker network create shared-network` lalu `docker compose up -d` ulang |
 | 502 Bad Gateway | `attendapp-nginx` / `app` mati | `docker compose ps` & `docker compose logs laravel-nginx` |
+| **`502` di `:8102` atau `:8103`** (aplikasi baru) | container masih menjalankan entrypoint (tunggu PG, composer install, migrate, cache) — normal 10-60 detik setelah `up`; kalau tetap: container crash | `cd ithelper-docker && docker compose logs --tail 60 ithelper-app` (atau `imon-docker`/`imon-app`). Jalankan `bash tools/app-health.sh` untuk melihat semuanya sekaligus |
+| **Halaman tertukar / 502 muncul-hilang antar aplikasi** | alias DNS bertabrakan di `shared-network` (dua container menjawab nama `app` atau `laravel-nginx`) | `docker network inspect shared-network -f '{{range .Containers}}{{.Names}} {{end}}'` → pastikan aplikasi baru memakai `ithelper-app`/`ithelper-nginx` dan `imon-app`/`imon-nginx`, lalu `docker compose up -d --force-recreate` di stack yang salah nama |
+| **`password authentication failed for user "ithelper"` / `"imon"`** | role belum dibuat di PostgreSQL, atau `DB_PASSWORD` berbeda dengan `CREATE ROLE` | `docker exec -i postgres-db psql -U postgres -v ON_ERROR_STOP=1 < db-postgres-docker/postgres/conf.d/20-app-databases.sql`, lalu cocokkan `DB_PASSWORD` di `.env.docker` |
+| **`database "ithelper" does not exist`** | file `20-app-databases.sql` belum pernah dijalankan di VPS ini (volume PostgreSQL sudah ada, jadi `initdb` tidak mengulang) | jalankan perintah `psql` di atas — file itu idempoten |
+| **`SQLSTATE[42601]: Syntax error at or near "MODIFY"`** saat migrate ITHelper | migrasi memakai sintaks MySQL (`ALTER TABLE ... MODIFY`) | pakai migrasi versi portabel yang disiapkan di repo (lihat bagian "Migrasi khusus MySQL pada ITHelper") |
+| **CSS/JS tidak termuat di https://desk... atau https://imon...** | `TrustProxies::$proxies` kosong di repo aplikasi → `X-Forwarded-Proto` diabaikan | set `protected $proxies = '*';` di `app/Http/Middleware/TrustProxies.php`, lalu recreate container app |
 | **`502` + log `==> vendor/ belum ada, menjalankan composer install...` berulang** | `composer install` gagal → entrypoint `exit 1` → Docker restart-loop → `app` tidak pernah listen di `:9000` → nginx balas 502 | cek pesan Composer di `docker compose logs app`; penyebab tersering `composer.lock` tidak kompatibel dengan PHP container (lihat baris berikut) |
 | **`nette/schema v1.2.2 requires php >=7.1 <8.2 -> your php version (8.2.35) does not satisfy that requirement`** | lock lama (dependensi transitif `league/config`) dibatasi PHP < 8.2, sedangkan image memakai PHP 8.2 | sudah diperbaiki: `nette/schema` dinaikkan ke v1.4.0 (`php 8.1 - 8.6`), `nette/utils` v4.0.11, `league/config` v1.2.0. Terapkan dengan `git pull` di repo aplikasi lalu `docker compose up -d --build app`. Bila memakai lock sendiri: `composer update nette/schema league/config --with-dependencies` |
 | **`fatal: detected dubious ownership in repository at '/var/www/html'`** | folder aplikasi di-bind-mount dan dimiliki user host, sedangkan proses container berjalan sebagai `root` | sudah diperbaiki: entrypoint menjalankan `git config --global --add safe.directory /var/www/html`. Manual: `docker compose exec app git config --global --add safe.directory /var/www/html` |
