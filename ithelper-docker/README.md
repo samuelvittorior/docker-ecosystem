@@ -74,6 +74,30 @@ docker compose up -d --force-recreate ithelper-app   # WAJIB: OPcache tidak reva
 > `opcache.validate_timestamps=0` → kode lama tetap dipakai dari RAM sampai
 > container di-recreate. `reload` saja tidak cukup.
 
+## Deploy otomatis (GitHub Actions di repo aplikasi)
+
+Workflow `.github/workflows/deploy.yml` milik repo **ITHelper** hanya menyentuh
+repo aplikasi; ia **tidak** menyentuh folder infra ini:
+
+```bash
+git pull --ff-only origin main        # di $VPS_APP_PATH (repo aplikasi)
+composer install                      # hanya bila composer.json/lock berubah
+docker restart ithelper-app           # entrypoint: migrate + cache, OPcache reset
+curl http://127.0.0.1:8102/login      # harus 200 (maks 180 detik)
+```
+
+Konsekuensinya:
+
+- **Tidak ada** `git pull` / `docker compose` / cek network / cek `postgres-db`
+  di `docker-ecosystem` dari CI. Semua perubahan infra (`docker-compose.yml`,
+  `Dockerfile`, `nginx/`, `php/`, `.env.docker`, SQL database, DNS, SSL) tetap
+  **manual** di VPS seperti dijelaskan di atas.
+- Nama container & URL health bisa diubah per repo: **Settings** →
+  **Secrets and variables** → **Actions** → tab **Variables**
+  (`APP_CONTAINER`, `HEALTH_URL`).
+- `docker restart` cukup karena kode di-mount dan `opcache.validate_timestamps=0`
+  hanya bisa direset dengan memulai ulang PHP-FPM.
+
 ## Mengaktifkan HTTPS
 
 ```bash

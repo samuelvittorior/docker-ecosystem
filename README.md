@@ -598,7 +598,7 @@ aplikasi, bukan di repo ini:
 
 | Repo | File workflow | Fungsi |
 |------|---------------|--------|
-| `attendapp` | `.github/workflows/deploy.yml` | Test (lint + PHPUnit) lalu deploy ke VPS (pull, composer, migrate, cache, recreate `app`) |
+| `attendapp` | `.github/workflows/deploy.yml` | Test (lint + PHPUnit), lalu deploy ke VPS: `git pull` di repo aplikasi + `docker restart attendapp-app` (tidak menyentuh repo ini) |
 
 > ⚠️ GitHub **hanya** membaca workflow dari `.github/workflows/` di **root repo**.
 > Workflow di subfolder (mis. `app-laravel-docker/.github/...`) tidak akan dijalankan.
@@ -613,8 +613,13 @@ Repo → **Settings** → **Secrets and variables** → **Actions** → **New re
 | `VPS_USER` | `user` | user SSH; harus bisa menjalankan `docker` (root atau anggota grup `docker`) |
 | `VPS_SSH_KEY` | `-----BEGIN OPENSSH PRIVATE KEY-----…` | **private key** SSH, salin lengkap termasuk baris `BEGIN`/`END` |
 | `VPS_PORT` | `22` | port SSH (opsional; workflow memakai `22` bila secret kosong) |
-| `VPS_INFRA_PATH` | `/home/user/projects/docker-ecosystem` | path repo infra di VPS (tempat `docker compose` aplikasi dijalankan) |
 | `VPS_APP_PATH` | `/home/user/projects/attendapp` | path checkout repo aplikasi di VPS |
+
+> ⚠️ `VPS_INFRA_PATH` **tidak dipakai lagi**. Workflow aplikasi tidak menyentuh
+> repo infra (`docker-ecosystem`) sama sekali: tidak ada `git pull` infra, tidak ada
+> `docker compose` di folder infra, tidak ada pengecekan network/`postgres-db`/
+> redis/reverse proxy. Deploy aplikasi = `git pull` di repo aplikasi + restart
+> container aplikasi (`docker restart attendapp-app`).
 
 > ⚠️ `VPS_APP_PATH` harus **clone dari repo aplikasi yang sama** dengan yang
 > memicu workflow. Kalau di VPS isinya repo/fork lain, `git pull --ff-only` akan
@@ -1345,6 +1350,20 @@ Tiap repo aplikasi punya workflow sendiri: `.github/workflows/deploy.yml`.
 | `ITHelper` | `Deploy App - ITHelper` | `deploy-ithelper` | `:8102/login` |
 | `ItemMonitoring` | `Deploy App - ItemMonitoring` | `deploy-imon` | `:8103/login` |
 
+> 🔒 **Deploy tidak menyentuh repo infra.** Job `deploy` hanya melakukan ini:
+>
+> 1. `git pull --ff-only origin main` di `VPS_APP_PATH` (repo aplikasi)
+> 2. `composer install` **di dalam container aplikasi**, hanya bila `composer.json`
+>    atau `composer.lock` berubah pada commit tersebut
+> 3. `docker restart <container aplikasi>` — entrypoint lalu menjalankan
+>    `optimize:clear`, `migrate --force`, `config:cache`, `route:cache`, `view:cache`
+> 4. tunggu `http://127.0.0.1:<port>/login` mengembalikan 200 (maks 180 detik)
+>
+> Nama container & URL health bisa diganti tanpa mengedit YAML: repo → **Settings**
+> → **Secrets and variables** → **Actions** → tab **Variables** (`APP_CONTAINER`,
+> `HEALTH_URL`). Perubahan Dockerfile/compose/nginx/`.env.docker`/SQL database
+> tetap **manual di VPS** (lihat bagian deploy manual di atas).
+
 Secrets yang dipakai (nama sama di ketiga repo):
 
 | Secret | Isi |
@@ -1354,7 +1373,11 @@ Secrets yang dipakai (nama sama di ketiga repo):
 | `VPS_SSH_KEY` | private key deploy khusus repo tersebut |
 | `VPS_PORT` | (opsional) default 22 |
 | `VPS_APP_PATH` | path repo aplikasi di VPS, mis. `/home/user/projects/ITHelper` |
-| `VPS_INFRA_PATH` | path repo infra, mis. `/home/user/projects/docker-ecosystem` |
+
+> ⚠️ `VPS_INFRA_PATH` **tidak dipakai lagi**. Ketiga workflow aplikasi sengaja
+> tidak menyentuh repo infra: hanya `git pull` di repo aplikasi masing-masing lalu
+> `docker restart <container aplikasi>`. Semua perubahan infra (compose,
+> Dockerfile, nginx, `.env.docker`, SQL database, DNS, SSL) tetap **manual di VPS**.
 
 > **Satu deploy key per repo.** Jangan memakai satu key untuk tiga repo: kalau
 > satu key bocor, semua server/repo bisa diakses. Pasang public key-nya di

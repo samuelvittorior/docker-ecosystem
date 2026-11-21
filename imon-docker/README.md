@@ -69,6 +69,27 @@ cd ~/projects/docker-ecosystem/imon-docker
 docker compose up -d --force-recreate imon-app
 ```
 
+## Deploy otomatis (GitHub Actions di repo aplikasi)
+
+Workflow `.github/workflows/deploy.yml` milik repo **ItemMonitoring** hanya
+menyentuh repo aplikasi; ia **tidak** menyentuh folder infra ini:
+
+```bash
+git pull --ff-only origin main        # di $VPS_APP_PATH (repo aplikasi)
+composer install                      # hanya bila composer.json/lock berubah
+docker restart imon-app               # entrypoint: migrate + cache, OPcache reset
+curl http://127.0.0.1:8103/login      # harus 200 (maks 180 detik)
+```
+
+**Tidak ada** `git pull` / `docker compose` / cek network / cek `postgres-db` di
+`docker-ecosystem` dari CI. Semua perubahan infra (`docker-compose.yml`,
+`Dockerfile`, `nginx/`, `php/`, `.env.docker`, SQL database, DNS, SSL) tetap
+**manual** di VPS.
+
+Nama container & URL health bisa diubah per repo tanpa mengedit YAML:
+**Settings** → **Secrets and variables** → **Actions** → tab **Variables**
+(`APP_CONTAINER`, `HEALTH_URL`).
+
 ## Mengaktifkan HTTPS
 
 ```bash
