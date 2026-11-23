@@ -78,7 +78,7 @@ memakai `CACHE_DRIVER=file` + `SESSION_DRIVER=file` (disimpan di
 | `redis-shared-docker/` | Redis BERSAMA (dipakai AttendApp) | tidak diekspos |
 | `db-postgres-docker/` | PostgreSQL 15 bersama semua aplikasi (membuat `shared-network`) | tidak diekspos |
 | `reverse-proxy-docker/` | Nginx reverse proxy subdomain | 80, 443, **8101/8102/8103** |
-| `tools/` | Skrip bantu operasional (`app-health.sh`, `enable-https.sh`, dll) | - |
+| `tools/` | Skrip bantu operasional (`app-health.sh`, `fix-buildkit.sh`, `enable-https.sh`, dll) | - |
 
 > **Satu folder = satu ekosistem = satu `docker compose`.** Jangan menggabungkan
 > dua aplikasi dalam satu compose: `container_name` dan alias network harus unik,
@@ -718,6 +718,47 @@ Pesan yang paling sering muncul:
 | `No such container` | nama salah → set Variable `APP_CONTAINER`, atau buat container manual lewat `docker compose up -d --build` di folder infra |
 | `permission denied ... docker.sock` | user SSH belum anggota grup `docker`: `sudo usermod -aG docker $USER` lalu login ulang |
 | `driver failed programming external connectivity` | Docker daemon bermasalah (iptables/port) → `sudo systemctl restart docker`, lalu `docker compose up -d` di folder infra |
+
+> ⚠️ Kalau log deploy memuat baris seperti `Menyalakan container ...`,
+> `Image app-laravel-docker-app Building`, atau `docker compose up -d --build`,
+> berarti repo aplikasi memakai workflow **lain** yang masih membangun image di
+> folder infra. Alur yang benar: CI hanya `git pull` + restart container.
+> Build image adalah pekerjaan manual di VPS (lihat *Cara deploy dijalankan*).
+
+### Build gagal: `snapshot ... does not exist` (bukan salah Dockerfile)
+
+Gejala di log build (muncul juga saat `docker compose up -d --build` manual):
+
+```text
+#11 [stage-0 4/8] COPY php/www.conf /usr/local/etc/php-fpm.d/www.conf
+#11 ERROR: failed to commit ... during finalize:
+     failed to stat active key during commit: snapshot ... does not exist: not found
+failed to solve: ... snapshot ... does not exist: not found
+```
+
+Artinya **cache/metadata BuildKit tidak sinkron** dengan isi disk-nya. Ini bukan
+masalah `Dockerfile` atau isi `php/www.conf`. Pemicu umum: build dibatalkan di
+tengah, disk/inode penuh, `docker prune` jalan bersamaan, atau Docker daemon
+baru di-update (Docker 23+ memakai containerd image store/snapshotter).
+
+Perbaikan (di VPS, dari root repo infra):
+
+```bash
+cd ~/projects/docker-ecosystem
+bash tools/fix-buildkit.sh            # diagnosa + bersihkan cache build + uji build
+bash tools/fix-buildkit.sh --restart  # kalau perlu restart Docker daemon
+bash tools/fix-buildkit.sh --legacy   # upaya terakhir: builder lama
+```
+
+`fix-buildkit.sh` hanya menghapus **cache build** (`docker builder prune -af`);
+image dan container yang berjalan tidak disentuh. Kalau masih gagal, langkah
+lanjutannya sudah dicetak skrip itu (termasuk menonaktifkan containerd
+snapshotter dan membersihkan disk). Setelah builder sehat, baru jalankan build
+manual:
+
+```bash
+cd app-laravel-docker && docker compose up -d --build --force-recreate app laravel-nginx
+```
 
 ### Membuat SSH key khusus deploy
 
