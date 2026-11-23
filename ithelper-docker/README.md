@@ -97,11 +97,13 @@ Konsekuensinya:
   (`APP_CONTAINER`, `HEALTH_URL`).
 - `docker restart` cukup karena kode di-mount dan `opcache.validate_timestamps=0`
   hanya bisa direset dengan memulai ulang PHP-FPM.
-- Kalau step **Deploy via SSH** gagal, penyebabnya selalu tercetak: script memakai
-  `exec 2>&1` (stderr ikut tampil) dan tidak memakai `set -e`. Container `paused`
-  di-`unpause` dulu, container berhenti di-`start`, dan nama container dicari
-  otomatis bila berbeda dari `ithelper-app`. Panduan lengkap ada di
-  `../README.md` bagian *Kalau step "Deploy via SSH" gagal*.
+- Kalau step **Deploy via SSH** gagal, penyebabnya selalu tercetak: `exec 2>&1`
+  (stderr ikut tampil), `set +e` (menetralkan `set -e` dari `script_stop`), dan
+  tiap perintah dicetak bersama exit code-nya. Container `paused` di-`unpause`
+  dulu, container berhenti di-`start`, dan nama container dicari otomatis bila
+  berbeda dari `ithelper-app`. Log lengkap juga tersimpan di
+  `/tmp/deploy-ithelper.log` pada VPS. Panduan ada di `../README.md` bagian
+  *Kalau step "Deploy via SSH" gagal*.
 
 ## Mengaktifkan HTTPS
 

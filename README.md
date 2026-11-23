@@ -627,35 +627,63 @@ Repo → **Settings** → **Secrets and variables** → **Actions** → **New re
 
 ### Kalau step "Deploy via SSH" gagal
 
-Workflow menulis setiap langkah (`0/4` … `4/4`) dan **selalu** mencetak penyebab
-kegagalan. Dua hal yang membuat dulu gagal tanpa pesan:
+Script deploy mencetak **setiap** perintah beserta exit code-nya, contoh:
+
+```text
+==> 2/4 Cek container aplikasi
+    container ditemukan: attendapp-app
+    status container: running
+    commit tidak berubah -> vendor/ dibiarkan.
+
+==> 3/4 Jalankan ulang container
+    $ docker stop -t 30 attendapp-app
+      stop: attendapp-app
+      exit=0
+    $ docker start attendapp-app
+      start: attendapp-app
+      exit=0
+```
+
+Kalau ada yang gagal, penyebabnya ikut tercetak (pesan daemon apa adanya), jadi
+tidak ada lagi step yang berhenti tanpa penjelasan. Tiga hal yang membuat dulu
+gagal senyap:
 
 | Penyebab | Perbaikan di workflow |
 |----------|-----------------------|
-| `appleboy/ssh-action` tidak menampilkan **stderr**, sedangkan `set -e` mematikan script saat `docker restart` gagal → log berhenti di `==> 2/3` lalu `Process exited with status 1` | `exec 2>&1` di awal script (semua stderr masuk stdout) + `set -e` dihapus, tiap perintah dicek manual (`gagal "..."`) |
-| `docker restart` dipakai untuk semua kondisi | container `paused` → `unpause` dulu; container berhenti → `docker start`; hanya `running` yang di-`restart` |
+| `appleboy/ssh-action` tidak menampilkan **stderr** | `exec 2>&1` di awal script: stderr Docker/git masuk stdout |
+| `script_stop: true` menyuntik `set -e`, sehingga perintah pertama yang gagal mematikan script → log berhenti di tengah lalu hanya `Process exited with status 1` | `set +e` tepat setelah header (menetralkan suntikan itu) + helper `gagal`/`jalankan` yang mengecek exit code sendiri |
+| `docker restart` dipakai untuk semua kondisi | `docker stop -t 30` + `docker start` (lebih jelas bagian mana yang gagal); `paused` → `unpause` dulu; container berhenti → langsung `start` |
+
+Seluruh output juga disimpan di VPS, jadi masih bisa dibaca walau log Actions
+terpotong:
+
+```bash
+cat /tmp/deploy-attendapp.log      # ithelper / imon untuk aplikasi lain
+```
 
 Kalau nama container di VPS berbeda dari default (`attendapp-app`), workflow
 mencari otomatis container berprefix sama (`attendapp*`, tanpa `nginx`/`db`/
 `redis`) dan memakainya. Kalau tidak ketemu / kandidat lebih dari satu, workflow
-mencetak daftar container + saran perbaikan, bukan gagal diam-diam.
+mencetak daftar container + saran perbaikan.
 
 Cek manual di VPS bila masih perlu:
 
 ```bash
 docker ps -a --format '{{.Names}}\t{{.Status}}'   # nama container sebenarnya
-docker inspect -f '{{.State.Status}}' attendapp-app
-docker restart attendapp-app                      # error daemon akan terlihat di sini
+docker inspect -f '{{.State.Status}} {{.State.Error}}' attendapp-app
+docker stop -t 30 attendapp-app && docker start attendapp-app   # error asli terlihat di sini
+sudo journalctl -u docker -n 50 --no-pager        # log daemon Docker
 ```
 
-Pesan yang paling sering muncul saat restart gagal:
+Pesan yang paling sering muncul:
 
 | Pesan | Arti / perbaikan |
 |-------|------------------|
 | `bind source path does not exist: /path` | folder kode yang di-mount hilang/berpindah → `cd ~/projects/docker-ecosystem/app-laravel-docker && docker compose up -d --force-recreate` (setelah `LARAVEL_APP_PATH` benar) |
-| `container is paused` | `docker unpause attendapp-app` (workflow baru sudah melakukannya otomatis) |
+| `container is paused` | `docker unpause attendapp-app` (workflow sudah melakukannya otomatis) |
 | `No such container` | nama salah → set Variable `APP_CONTAINER`, atau buat container manual lewat `docker compose up -d --build` di folder infra |
 | `permission denied ... docker.sock` | user SSH belum anggota grup `docker`: `sudo usermod -aG docker $USER` lalu login ulang |
+| `driver failed programming external connectivity` | Docker daemon bermasalah (iptables/port) → `sudo systemctl restart docker`, lalu `docker compose up -d` di folder infra |
 
 ### Membuat SSH key khusus deploy
 
