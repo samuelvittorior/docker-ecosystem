@@ -90,6 +90,12 @@ Nama container & URL health bisa diubah per repo tanpa mengedit YAML:
 **Settings** → **Secrets and variables** → **Actions** → tab **Variables**
 (`APP_CONTAINER`, `HEALTH_URL`).
 
+Kalau step **Deploy via SSH** gagal, penyebabnya selalu tercetak: script memakai
+`exec 2>&1` (stderr ikut tampil) dan tidak memakai `set -e`. Container `paused`
+di-`unpause` dulu, container berhenti di-`start`, dan nama container dicari
+otomatis bila berbeda dari `imon-app`. Panduan lengkap ada di `../README.md`
+bagian *Kalau step "Deploy via SSH" gagal*.
+
 ## Mengaktifkan HTTPS
 
 ```bash

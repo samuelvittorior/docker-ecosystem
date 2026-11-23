@@ -625,6 +625,38 @@ Repo → **Settings** → **Secrets and variables** → **Actions** → **New re
 > memicu workflow. Kalau di VPS isinya repo/fork lain, `git pull --ff-only` akan
 > ditolak (`diverged`) dan deploy gagal — itu memang pengaman, bukan bug.
 
+### Kalau step "Deploy via SSH" gagal
+
+Workflow menulis setiap langkah (`0/4` … `4/4`) dan **selalu** mencetak penyebab
+kegagalan. Dua hal yang membuat dulu gagal tanpa pesan:
+
+| Penyebab | Perbaikan di workflow |
+|----------|-----------------------|
+| `appleboy/ssh-action` tidak menampilkan **stderr**, sedangkan `set -e` mematikan script saat `docker restart` gagal → log berhenti di `==> 2/3` lalu `Process exited with status 1` | `exec 2>&1` di awal script (semua stderr masuk stdout) + `set -e` dihapus, tiap perintah dicek manual (`gagal "..."`) |
+| `docker restart` dipakai untuk semua kondisi | container `paused` → `unpause` dulu; container berhenti → `docker start`; hanya `running` yang di-`restart` |
+
+Kalau nama container di VPS berbeda dari default (`attendapp-app`), workflow
+mencari otomatis container berprefix sama (`attendapp*`, tanpa `nginx`/`db`/
+`redis`) dan memakainya. Kalau tidak ketemu / kandidat lebih dari satu, workflow
+mencetak daftar container + saran perbaikan, bukan gagal diam-diam.
+
+Cek manual di VPS bila masih perlu:
+
+```bash
+docker ps -a --format '{{.Names}}\t{{.Status}}'   # nama container sebenarnya
+docker inspect -f '{{.State.Status}}' attendapp-app
+docker restart attendapp-app                      # error daemon akan terlihat di sini
+```
+
+Pesan yang paling sering muncul saat restart gagal:
+
+| Pesan | Arti / perbaikan |
+|-------|------------------|
+| `bind source path does not exist: /path` | folder kode yang di-mount hilang/berpindah → `cd ~/projects/docker-ecosystem/app-laravel-docker && docker compose up -d --force-recreate` (setelah `LARAVEL_APP_PATH` benar) |
+| `container is paused` | `docker unpause attendapp-app` (workflow baru sudah melakukannya otomatis) |
+| `No such container` | nama salah → set Variable `APP_CONTAINER`, atau buat container manual lewat `docker compose up -d --build` di folder infra |
+| `permission denied ... docker.sock` | user SSH belum anggota grup `docker`: `sudo usermod -aG docker $USER` lalu login ulang |
+
 ### Membuat SSH key khusus deploy
 
 ```bash
