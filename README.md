@@ -619,47 +619,81 @@ Repo → **Settings** → **Secrets and variables** → **Actions** → **New re
 > repo infra (`docker-ecosystem`) sama sekali: tidak ada `git pull` infra, tidak ada
 > `docker compose` di folder infra, tidak ada pengecekan network/`postgres-db`/
 > redis/reverse proxy. Deploy aplikasi = `git pull` di repo aplikasi + restart
-> container aplikasi (`docker restart attendapp-app`).
+> container aplikasi (`docker restart attendapp-app`) lewat `ssh` biasa (bukan
+> `appleboy/ssh-action`) — lihat *Cara deploy dijalankan* di bawah.
 
 > ⚠️ `VPS_APP_PATH` harus **clone dari repo aplikasi yang sama** dengan yang
 > memicu workflow. Kalau di VPS isinya repo/fork lain, `git pull --ff-only` akan
 > ditolak (`diverged`) dan deploy gagal — itu memang pengaman, bukan bug.
+
+### Cara deploy dijalankan (penting)
+
+Workflow **tidak** memakai `appleboy/ssh-action` lagi. Runner memanggil klien
+**OpenSSH bawaan** (`ssh`) dan mengirim script lewat stdin:
+
+```yaml
+ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -T "$VPS_USER@$VPS_HOST" \
+    "APP_PATH=... APP_CONTAINER=... HEALTH_URL=... bash -s" <<'DEPLOY_SCRIPT'
+  ...script...
+DEPLOY_SCRIPT
+```
+
+Alasannya (semua ini pernah membuat deploy berhenti tanpa pesan):
+
+| Masalah pada action | Sekarang |
+|---------------------|----------|
+| `script_stop: true` menyuntik `set -e` → perintah pertama yang gagal mematikan script, log berhenti di tengah lalu hanya `Process exited with status 1` | tidak ada injeksi; script memakai `set +e` dan mengecek exit code sendiri |
+| stderr tidak selalu diteruskan | OpenSSH meneruskan stdout **dan** stderr apa adanya |
+| output bisa hilang saat gagal | setiap perintah dicetak (`$ docker restart ...`) berikut `exit=0/1` |
+| tidak jelas baris mana yang mati | ada `trap` yang mencetak `!!! script berhenti (exit N) di baris M` |
 
 ### Kalau step "Deploy via SSH" gagal
 
 Script deploy mencetak **setiap** perintah beserta exit code-nya, contoh:
 
 ```text
-==> 2/4 Cek container aplikasi
+==> 2/5 Cek container aplikasi
     container ditemukan: attendapp-app
     status container: running
-    commit tidak berubah -> vendor/ dibiarkan.
 
-==> 3/4 Jalankan ulang container
-    $ docker stop -t 30 attendapp-app
-      stop: attendapp-app
-      exit=0
-    $ docker start attendapp-app
-      start: attendapp-app
+==> 3/5 Dependency Composer (hanya bila composer.lock berubah)
+    composer.lock: 3cc9e9b51cb2 (terakhir: 3cc9e9b51cb2)
+    composer.lock tidak berubah -> vendor/ dibiarkan.
+
+==> 4/5 Jalankan ulang container
+    $ docker restart attendapp-app
+      restart ok: attendapp-app
       exit=0
 ```
 
 Kalau ada yang gagal, penyebabnya ikut tercetak (pesan daemon apa adanya), jadi
-tidak ada lagi step yang berhenti tanpa penjelasan. Tiga hal yang membuat dulu
-gagal senyap:
+tidak ada lagi step yang berhenti tanpa penjelasan:
 
-| Penyebab | Perbaikan di workflow |
-|----------|-----------------------|
-| `appleboy/ssh-action` tidak menampilkan **stderr** | `exec 2>&1` di awal script: stderr Docker/git masuk stdout |
-| `script_stop: true` menyuntik `set -e`, sehingga perintah pertama yang gagal mematikan script → log berhenti di tengah lalu hanya `Process exited with status 1` | `set +e` tepat setelah header (menetralkan suntikan itu) + helper `gagal`/`jalankan` yang mengecek exit code sendiri |
-| `docker restart` dipakai untuk semua kondisi | `docker stop -t 30` + `docker start` (lebih jelas bagian mana yang gagal); `paused` → `unpause` dulu; container berhenti → langsung `start` |
-
-Seluruh output juga disimpan di VPS, jadi masih bisa dibaca walau log Actions
-terpotong:
-
-```bash
-cat /tmp/deploy-attendapp.log      # ithelper / imon untuk aplikasi lain
+```text
+==> 4/5 Jalankan ulang container
+    $ docker restart attendapp-app
+      Error response from daemon: Cannot restart container attendapp-app: bind source path does not exist: /home/deploy/attendapp
+      exit=1
+       Diagnosa container:
+       status=exited exit=1 error=
+       Log container (40 baris terakhir):
+       ...
+ERROR: docker restart attendapp-app gagal (pesan daemon di atas). ...
 ```
+
+Catatan perubahan perilaku:
+
+- Deteksi dependency Composer **tidak lagi memakai `git diff`** (dulu justru di
+  titik itu script mati). Sekarang `composer.lock` di-checksum (`md5sum`) dan
+  dibandingkan dengan `/tmp/deploy-<app>.composer`. Kalau berubah (atau belum
+  pernah tercatat) → `docker exec <container> composer install --no-dev ...`.
+- `docker restart` dipakai untuk container yang hidup, `docker start` untuk yang
+  berhenti, dan `docker unpause` dulu bila container `paused`.
+- Semua output disimpan di VPS:
+
+  ```bash
+  cat /tmp/deploy-attendapp.log      # ithelper / imon untuk aplikasi lain
+  ```
 
 Kalau nama container di VPS berbeda dari default (`attendapp-app`), workflow
 mencari otomatis container berprefix sama (`attendapp*`, tanpa `nginx`/`db`/
@@ -799,7 +833,7 @@ PAT fine-grained cukup diberi **Repository access: hanya repo ini** +
 
 | Key | Disimpan di | Dipakai oleh | Fungsi |
 |-----|-------------|--------------|--------|
-| `VPS_SSH_KEY` (secret GitHub) | Secret repo `attendapp` | `appleboy/ssh-action` di runner | Masuk SSH ke VPS untuk menjalankan deploy |
+| `VPS_SSH_KEY` (secret GitHub) | Secret repo `attendapp` | `ssh` bawaan runner (OpenSSH) | Masuk SSH ke VPS untuk menjalankan deploy |
 | Deploy key VPS (`~/.ssh/id_attendapp`) | `~/.ssh` di VPS + Deploy keys repo | `git fetch/pull` **di VPS** | Menarik kode repo privat |
 
 ---

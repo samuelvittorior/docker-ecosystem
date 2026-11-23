@@ -90,13 +90,14 @@ Nama container & URL health bisa diubah per repo tanpa mengedit YAML:
 **Settings** → **Secrets and variables** → **Actions** → tab **Variables**
 (`APP_CONTAINER`, `HEALTH_URL`).
 
-Kalau step **Deploy via SSH** gagal, penyebabnya selalu tercetak: `exec 2>&1`
-(stderr ikut tampil), `set +e` (menetralkan `set -e` dari `script_stop`), dan
-tiap perintah dicetak bersama exit code-nya. Container `paused` di-`unpause`
-dulu, container berhenti di-`start`, dan nama container dicari otomatis bila
-berbeda dari `imon-app`. Log lengkap juga tersimpan di `/tmp/deploy-imon.log`
-pada VPS. Panduan ada di `../README.md` bagian *Kalau step "Deploy via SSH"
-gagal*.
+Kalau step **Deploy via SSH** gagal, penyebabnya selalu tercetak: workflow
+memakai `ssh` biasa (bukan `appleboy/ssh-action`) dan mengirim script lewat
+`bash -s`, jadi stderr + exit code asli terlihat. Tiap perintah dicetak dengan
+`exit=0/1`, ada `trap` yang menunjukkan baris yang mati, container `paused`
+di-`unpause` dulu, container berhenti di-`start`, dan nama container dicari
+otomatis bila berbeda dari `imon-app`. Log lengkap juga tersimpan di
+`/tmp/deploy-imon.log` pada VPS. Panduan ada di `../README.md` bagian *Cara
+deploy dijalankan*.
 
 ## Mengaktifkan HTTPS
 
